@@ -1,9 +1,9 @@
 """
-STAR rule lifecycle round-trip test — REVERSIBLE.
+STAR rule lifecycle round-trip test, REVERSIBLE.
 
 "STAR rules" is the product term for streaming Custom Detection rules that
 fire on every matching event in real-time. The API has no separate /star-rules
-path — they are cloud-detection/rules with queryType=events.
+path, they are cloud-detection/rules with queryType=events.
 
 Exercises:
 
@@ -13,7 +13,7 @@ Exercises:
     DELETE  DELETE /web/api/v2.1/cloud-detection/rules   (body: {filter: {ids, siteIds}})
     VERIFY  GET    (expect 0 hits for the deleted rule id)
 
-The rule uses status=Draft throughout — it is never activated, so it cannot
+The rule uses status=Draft throughout, it is never activated, so it cannot
 fire against live telemetry. The s1ql targets a fictional process name that
 will never exist on a real endpoint. Zero blast radius.
 
@@ -23,14 +23,14 @@ Endpoint notes (confirmed via swagger + live API, 2026-05)
   are queryType=events on the shared cloud-detection/rules endpoint.
 - queryType enum: events, scheduled, correlation, uebafirstseen.
 - isLegacy=false is NOT required for events rules (only for scheduled).
-- DELETE body: top-level {filter: {ids: [...], siteIds: [...]}} — no "data" wrapper.
+- DELETE body: top-level {filter: {ids: [...], siteIds: [...]}}, no "data" wrapper.
   Returns {"data": {"affected": N}}.
 - PUT /{rule_id} requires all 5 fields: name, queryType, severity,
   expirationMode, status. s1ql must also be re-supplied.
-- "activeResponse" in CREATE body returns HTTP 400 "Unknown field" — omit it.
+- "activeResponse" in CREATE body returns HTTP 400 "Unknown field", omit it.
 - queryLang defaults to "1.0" for events rules; do not set it explicitly.
 - treatAsThreat="UNDEFINED" is accepted but stored as null in the response.
-- GET nameSubstring + queryType together returns HTTP 500 — use only one filter
+- GET nameSubstring + queryType together returns HTTP 500, use only one filter
   at a time, or use ids for point-lookup.
 
 Usage
@@ -82,14 +82,14 @@ def _pick_site_id(client: S1Client) -> str:
 
 def create_star_rule(client: S1Client, site_id: str) -> Dict[str, Any]:
     """
-    Create a STAR (events) rule in Draft status — safe, never fires.
+    Create a STAR (events) rule in Draft status, safe, never fires.
 
     Required fields (confirmed against swagger + live API):
       name, queryType, severity, expirationMode, status (all 5 mandatory).
       s1ql is technically optional per swagger but required in practice.
 
     Confirmed gotchas (live API, 2026-05):
-    - "activeResponse" is rejected as an unknown field — do not include it.
+    - "activeResponse" is rejected as an unknown field, do not include it.
     - "treatAsThreat": "UNDEFINED" is accepted but stored as null in the response.
     - queryLang defaults to "1.0" for events rules; do not set it explicitly.
     """
@@ -98,8 +98,8 @@ def create_star_rule(client: S1Client, site_id: str) -> Dict[str, Any]:
             "name": RULE_NAME,
             "description": f"Smoke test. run_tag={RUN_TAG}. Safe to delete.",
             "queryType": "events",
-            # queryLang: not set — defaults to "1.0" for events rules (S1QL, not PQ 2.0)
-            # activeResponse: NOT included — live API returns HTTP 400 "unknown field"
+            # queryLang: not set, defaults to "1.0" for events rules (S1QL, not PQ 2.0)
+            # activeResponse: NOT included, live API returns HTTP 400 "unknown field"
             "s1ql": SAFE_S1QL,
             "severity": "Low",
             "expirationMode": "Permanent",
@@ -151,7 +151,7 @@ def get_rule_by_id(client: S1Client, rule_id: str,
 def update_star_rule(client: S1Client, rule_id: str,
                      site_id: str) -> Dict[str, Any]:
     """
-    PUT /{rule_id} — all 5 required fields must be re-supplied.
+    PUT /{rule_id}, all 5 required fields must be re-supplied.
     Updates the description to confirm write-back works.
     """
     body = {
@@ -208,7 +208,7 @@ def main() -> int:
         created = create_star_rule(client, site_id)
     except S1APIError as e:
         if e.status == 403:
-            _log("CREATE skipped: HTTP 403 — token lacks cloud-detection write scope")
+            _log("CREATE skipped: HTTP 403, token lacks cloud-detection write scope")
             return 0
         _log(f"CREATE FAILED: HTTP {e.status} {e}")
         return 1

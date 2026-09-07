@@ -1,5 +1,5 @@
 """
-XDR Graph Query lifecycle round-trip test — REVERSIBLE.
+XDR Graph Query lifecycle round-trip test, REVERSIBLE.
 
 Exercises the graph query save/update/delete surface:
 
@@ -9,7 +9,7 @@ Exercises the graph query save/update/delete surface:
     DELETE  DELETE /web/api/v2.1/xdr/graph-explorer/query/management/query/{query_id}
     VERIFY  GET    (expect saved query absent)
 
-Graph saved queries are user-scope objects — they do not affect agents, threats,
+Graph saved queries are user-scope objects, they do not affect agents, threats,
 or detection logic. Zero blast radius.
 
 Scope
@@ -57,7 +57,7 @@ def _log(msg: str) -> None:
 def discover_query_format(client: S1Client) -> Optional[str]:
     """
     Return a valid query string by reading the first existing saved query on the tenant.
-    Returns None if no saved queries exist — the test will skip in that case.
+    Returns None if no saved queries exist, the test will skip in that case.
     The XDR graph explorer uses a proprietary server-validated format that cannot be
     constructed without a live example.
     """
@@ -180,7 +180,7 @@ def main() -> int:
         return 5
     _log("VERIFY ok: query removed")
 
-    _log("XDR graph query lifecycle: SAVE → LIST → UPDATE → DELETE → VERIFY — ALL OK")
+    _log("XDR graph query lifecycle: SAVE → LIST → UPDATE → DELETE → VERIFY, ALL OK")
     return 0
 
 

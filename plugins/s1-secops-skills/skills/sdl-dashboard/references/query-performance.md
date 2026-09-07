@@ -197,7 +197,7 @@ The datatable numbers sit on a ~3.4 s launch+poll floor, so the true gain is lar
 ### Count the scans per TAB, not per panel
 
 A tab fires every panel at once. That Overview had five independent full-lake scans, and **two of
-them were the same query differing only by `limit 15` vs `limit 10`** — one scan was pure waste.
+them were the same query differing only by `limit 15` vs `limit 10`**, one scan was pure waste.
 Before shipping a tab, list its queries and look for duplicates and for anything hitting the lake
 that need not.
 
@@ -239,7 +239,7 @@ aggregation into the `datasource` statement, before the first pipe:
 
 Aggregation happens in the storage layer, so the pipeline receives pre-grouped rows. After a
 pushdown always fold with `sum(count)`, never `count()`. Anti-pattern:
-`| datasource assets | group count() by category` — same answer, no pushdown.
+`| datasource assets | group count() by category`, same answer, no pushdown.
 
 Prune on the datasource line too:
 
@@ -272,7 +272,7 @@ lake scan takes 5-18 s. Before reaching for it:
 
 - it measures **bytes**, not event counts;
 - granularity is **daily** only;
-- it **lags several days** — measured 5 days behind, and a 24-hour window returns **zero rows**.
+- it **lags several days**, measured 5 days behind, and a 24-hour window returns **zero rows**.
 
 Good for long-range trend and cost panels. Useless for "is this feed dark now", and the zero-row
 result for a recent window looks like a broken query rather than a stale datasource.
@@ -286,7 +286,7 @@ panel query.
 
 One caveat on copying that fan-out: it works because those are ~1-2 s pre-aggregated entity queries.
 Firing many concurrent multi-hundred-million-row *lake* scans measured **slower** than running them
-sequentially — three concurrent 1-day slices took 334 s with two failures, against 213 s for a
+sequentially, three concurrent 1-day slices took 334 s with two failures, against 213 s for a
 single 3-day query.
 
 ### Always tear down abandoned jobs
