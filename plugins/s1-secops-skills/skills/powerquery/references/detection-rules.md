@@ -2,21 +2,23 @@
 
 PowerQuery Alerts (and STAR / Custom Detection rules that use a PowerQuery body) have tighter limits than ad-hoc hunts. This file covers how to write detection rule bodies that are correct, cheap, and reliably fire.
 
-## The three Custom Detection (STAR) rule types
+## The four ways to build a detection
 
-Every Custom Detection / STAR rule is created at `POST /web/api/v2.1/cloud-detection/rules` with `queryLang: "2.0"`, and listed with `isLegacy=false`. There are three `queryType` values; each puts its logic in a different field and uses a different language. Pick the type by what the detection needs to express.
+Three are Custom Detection (STAR) rule types, created at `POST /web/api/v2.1/cloud-detection/rules` with `queryLang: "2.0"` and listed with `isLegacy=false`. Each `queryType` puts its logic in a different field and uses a different language. The fourth, the HA watchdog, is not a rule at all: it is a Hyperautomation workflow that runs the query and raises the alert itself, and it exists for the PowerQuery a scheduled rule will not accept. Pick by what the detection needs to express.
 
 | Type | `queryType` | Body lives in | Body language | Fires | Asset binding | Mitigation (Active Response) | Use for |
 |---|---|---|---|---|---|---|---|
 | **STAR single-event** | `events` | `data.s1ql` | boolean S1QL, NO pipes | per matching event, streaming at ingest | automatic, from the matched event | inline Active Response (`treatAsThreat` Suspicious/Malicious, `networkQuarantine`) or HA flow | deterministic single-event signatures (a process + cmdline, a registry write, one log line) |
 | **STAR multi-event (correlation)** | `correlation` | `data.correlationParams` (`s1ql` stays `""`) | each sub-query is boolean S1QL, NO pipes | when sub-query match thresholds are met inside a time window, grouped by an entity | automatic, from the matched events; `entityMappings` optional | inline Active Response (`treatAsThreat`) or HA flow | thresholds (N of X), multi-stage chains, ordered sequences (A then B) |
 | **Scheduled (PowerQuery)** | `scheduled` | `data.scheduledParams.query` (`s1ql` stays `""`) | PowerQuery, pipes allowed | on a schedule (`runIntervalMinutes`) over a lookback window | NOT automatic, set `entityMappings` on the projected columns | via HA flow off the alert (`treatAsThreat` must be `UNDEFINED`, `networkQuarantine` false; no inline Active Response) | aggregation, statistics/baselines, cross-field grouping, lookup/anti-join exclusions |
+| **HA watchdog** | not a rule | a Hyperautomation workflow | full PowerQuery via the LRQ API, no evaluator restrictions | on the workflow's own `scheduled_trigger` | you compose the alert, so any field can carry the asset | any HTTP call the flow can make | a query the scheduled evaluator rejects: `datasource`, `savelookup`, `now()`, `timebucket`, unrestricted joins, results past the 1,000-row cap, or an alert whose title and description must come from the result |
 
 Decision guide:
 
 - The signal is one event you can describe with a boolean filter, **single-event**.
 - The signal is "N occurrences" or "A then B" across several events, correlated by a user/host/IP, **correlation**.
 - The signal needs `group`, `estimate_distinct`, `sum`, a `lookup` / anti-join, or any pipe, **scheduled**.
+- The scheduled evaluator rejects the query, or the alert body has to be built from the result, **HA watchdog**.
 
 Framed by intent rather than by mechanics:
 
@@ -25,6 +27,7 @@ Framed by intent rather than by mechanics:
 | A deterministic signature: this event, these fields | single-event |
 | The same entity does several things close together in time | correlation |
 | Retrospective, query-shaped detection over history: low-and-slow, multi-stage, patterns that only appear once aggregated | scheduled |
+| The query the detection needs is valid PowerQuery but the scheduled rule refuses it | HA watchdog |
 
 Correlation is a streaming, per-entity state machine: it groups events by an
 entity, waits for the configured behaviours to accumulate, and fires. Scheduled
@@ -452,11 +455,14 @@ scheduled rule:
 - Webhook notifications are not supported directly; route through a Hyperautomation flow.
 - A subset of PowerQuery functions is unsupported in scheduled rules.
 
-### Escape hatch: run the query in a Hyperautomation flow instead
+### The fourth rule type: the HA watchdog
 
 Every limit above is a limit of the scheduled-rule *evaluator*, not of the
 platform. A scheduled Hyperautomation workflow that runs the query itself and
-raises the alert itself is bound by none of them:
+raises the alert itself is bound by none of them. In the deployers this pattern
+is called an **HA watchdog**, and it is best treated as a fourth way to build a
+detection alongside `events`, `correlation` and `scheduled`: the fallback for a
+PowerQuery a scheduled rule will not accept.
 
 | Scheduled-rule limit | In an HA flow |
 |---|---|
@@ -472,38 +478,55 @@ The cost is that you own the polling, the failure handling and the alert
 schema. Reach for it when a limit blocks the detection, not by default: a
 scheduled rule that fits within the limits is less code to keep alive.
 
-**The shape**, both halves of which exist in shipped deployer templates:
+**The shape:**
 
 1. `scheduled_trigger` on the cadence you want.
-2. `http_request` POST `/sdl/v2/api/queries` to launch the LRQ. Capture the
-   query id AND the `X-Dataset-Query-Forward-Tag` response header.
-3. `variable` to hold the query id, then a `loop`.
-4. Inside the loop, `http_request` GET `/sdl/v2/api/queries/{id}` echoing the
-   forward tag on **every** poll, a `condition` on
-   `stepsCompleted >= stepsTotal`, a `delay` before the next attempt, and
-   `break_loop` once complete. There is no `status` string to test.
-5. `condition` on the result: rows returned, a threshold, whatever the
-   detection means. No match, exit quietly.
-6. On a match, `http_request` POST `/v1/alerts` on the ingest host to raise the
-   UAM alert, with indicators inline in `finding_info.related_events[]` (see the
-   UAM Alert Interface notes: `/v1/indicators` is unreachable, so the indicators
-   must ride in the same POST). Alert ingest authenticates with
-   `S1_CONSOLE_API_TOKEN` and **does** require `S1-Scope`.
+2. `http_request` POST `/sdl/v2/api/queries` to launch the LRQ.
+3. `variable` to hold the query id and the forward tag, then a `loop`.
+4. Inside the loop, `http_request` GET `/sdl/v2/api/queries/{id}`, a `condition`
+   on `stepsCompleted >= stepsTotal`, a guard for a backend-terminated query, a
+   `delay` before the next attempt, and `break_loop` once complete. There is no
+   `status` string to test.
+5. `variable` to compute the row count, then a `condition` on it. No match, exit
+   quietly.
+6. On a match, three actions: a `variable` holding the OCSF alert JSON, a
+   `variable` wrapping it as a files-array, and an `http_request` POST to
+   `/v1/alerts` on the ingest host. Indicators ride inline in
+   `finding_info.related_events[]` (`/v1/indicators` is unreachable, so they
+   must be in the same POST).
 
-A ready-to-adapt template covering the whole chain ships as
-`sdl-solutions/assets/scheduled_query_to_uam_alert.workflow.template.json`:
-fill in `{{PQ_QUERY}}`, `{{ACCOUNT_ID}}`, `{{SITE_ID}}`, `{{START_AT}}`, the two
-connection names and a `{{PREFIX}}`, then import. It is assembled from two
-flows already running in the field, so the mechanics are proven even though
-this combined file has not itself been deployed:
-`ingesthealth_watchdog.workflow.template.json` for the LRQ launch and
-forward-tag poll loop, and `rba_collector.workflow.template.json` for the
-`POST /v1/alerts` half.
+**Use the template, do not hand-assemble one.** The action envelope has about
+twenty-five required `data` keys per `http_request` plus `state`, `client_data`
+and `snippet_*` on every action; omitting any of them imports cleanly and then
+fails at runtime with no error the API will show you. Ship-ready template:
+`sdl-solutions/assets/ha_watchdog.workflow.template.json`. Fill in
+`{{PQ_QUERY}}`, `{{ACCOUNT_ID}}`, `{{SITE_ID}}`, `{{SDL_INTEGRATION_ID}}`,
+`{{HEC_URL}}`, `{{HEC_TOKEN}}` and `{{PREFIX}}`, then import. It is generated by
+the SecOps deployer's own `watchdog_workflow` builder, and was validated end to
+end on a live tenant: imported, activated, run, `Completed` in 10.5s across 14
+actions, with the resulting UAM alert carrying the query's own result rows in
+its description.
 
-Two failure modes worth pre-empting, both paid for in live debugging:
+Deploying it:
 
-- **Omitting the forward tag on a poll** fails the request at the routing layer. The tag is session-scoped: one flow's tag cannot be reused by another.
+| Step | Call |
+|---|---|
+| Import | `POST /web/api/v2.1/hyper-automate/api/public/workflow-import-export/import?accountIds=<acct>` body `{"data": <workflow>}` |
+| Activate | `POST /web/api/v2.1/hyper-automate/api/v1/workflows/{wid}/{vid}/activation?accountIds=<acct>` |
+| Run now | `POST /web/api/v2.1/hyper-automate/api/public/workflow-execution/manual/{wid}/{vid}?accountIds=<acct>` |
+| Deactivate | `POST /web/api/v2.1/hyper-automate/api/public/workflows/{wid}/deactivate?accountIds=<acct>` |
+| Delete | `DELETE /web/api/v2.1/hyper-automate/api/v1/workflows/{wid}?accountIds=<acct>` |
+
+The `?_scopeId=&_scopeLevel=` form of import returns 403. Delete returns 400
+until the workflow is deactivated.
+
+Failure modes worth pre-empting, all paid for in live debugging:
+
+- **There is no per-action error API.** A failed run reports only `state: Error` and `executed_actions: N` from `GET /hyper-automate/api/v1/workflow-execution`. To find the offending action, count into the flow, then reproduce that one HTTP call yourself.
+- **`data.totalRows` does not exist** on the LRQ poll response. The fields are `data.matchCount` (events matched) and `data.values` (result rows). A condition on `totalRows` compares against null forever.
+- **The alert POST body must be gzipped.** The proven recipe stages the alert into a variable, wraps it as `{"file":[{"name":"Alert.json","data": ...}]}`, then posts `{{Function.BASE64_DECODE_AS_BYTES(Function.COMPRESS(local_var.alertfile.file, "gzip"))}}` with `Content-Encoding: gzip`, `S1-Scope: <account>:<site>` and an explicit `Authorization: Bearer`. Alert ingest requires `S1-Scope`; without it the endpoint returns 400.
 - **A fixed `delay` instead of a poll loop** races the query. The LRQ expires roughly 30 seconds after the last poll, so poll steadily and cancel when done rather than sleeping once for a guessed duration.
+- **Doubly-escaped backslashes in any template value** break HA's reference validator. The flow still imports and reports success, then fails activation with "Some actions in this workflow have invalid references". Keep template values to simple `\"` escapes.
 
 ### What the alert's Indicators tab will contain
 
