@@ -22,7 +22,7 @@ description: >-
 > REST `listFiles` / `getFile` **cannot see** udoId-addressed `/dashboards/` files, so `getFile`
 > returns `404` on a dashboard the console is displaying and the listing under-reports (measured on
 > one tenant: REST 8, GraphQL 17, console 48 files). **If a listing disagrees with what the UI
-> shows, the listing is wrong until proven otherwise** — change read path before concluding the
+> shows, the listing is wrong until proven otherwise**, change read path before concluding the
 > object is missing or the token lacks scope. Use the GraphQL `configFiles` / `configFile` surface.
 > A name-addressed `addConfigFile` to `/dashboards/` **creates a duplicate** instead of updating;
 > address dashboards by `udoId` with `expectedVersion`. `content` is HJSON, not JSON. `S1-Scope`
@@ -106,7 +106,7 @@ Ask (or infer from context):
 ### Step 2: Warn about integrations
 
 **CRITICAL**: Before generating JSON, identify any integration-backed actions (tag = "integration").
-These require pre-configured connections in the console that CANNOT be *created* via API. (An EXISTING connection CAN be pre-bound programmatically: set `integration_id` = the connection's id on each `http_request` action in the import JSON with `use_authentication_data: true`, then activate via `POST .../workflows/{id}/{version_id}/activation`; no manual UI binding needed. One connection also serves actions that hit different hosts, e.g. the LRQ console host and the HEC ingest host, since auth is header-injected regardless of the URL.)
+These require pre-configured connections in the console that CANNOT be *created* via API. (An EXISTING connection CAN be pre-bound programmatically: set `integration_id` = the connection's id on each `http_request` action in the import JSON with `use_authentication_data: true`, then activate via `POST .../workflows/{id}/{version_id}/activation`; no manual UI binding needed. One connection also serves actions that hit different hosts, e.g. the LRQ console host and the `/v1/alerts` ingest host, since auth is header-injected regardless of the URL, PROVIDED both endpoints take the same credential. HEC event-collector actions (`/services/collector/*`) do not: they need their own connection holding an SDL Log Write Key, see "Connection requirement" below.)
 Always tell the user: *"This workflow uses the [X, Y, Z] integrations. Before importing, you must
 configure connections for these in your Hyperautomation → Integrations section."*
 
@@ -425,20 +425,30 @@ the query is done. Required pattern (tenant-validated 2026-06-25):
    `{{Function.ACCESS_LIST_ITEM(Function.ACCESS_LIST_ITEM(poll-slug.body.data.values, 0), 0)}}`.
    For a `savelookup` (no results consumed) the loop body is just poll → done-check → break/delay.
 
-**Connection requirement (do not skip):** every SDL HTTP action (launch + poll) and the HEC ingest
-calls must set `use_authentication_data: true` and be bound to the **"SentinelOne SDL"** connection,
-which signs `Authorization: Bearer <jwt>`, the auth LRQ requires. The "SentinelOne" mgmt connection
-signs `ApiToken` and the SDL endpoints reject it with `HTTP 500 "Header must start with Bearer"`.
+**Connection requirement (do not skip):** every SDL HTTP action (launch + poll) must set
+`use_authentication_data: true` and be bound to the **"SentinelOne SDL"** connection, which signs
+`Authorization: Bearer <jwt>`, the auth LRQ requires. The "SentinelOne" mgmt connection signs
+`ApiToken` and the SDL endpoints reject it with `HTTP 500 "Header must start with Bearer"`.
 Create/verify this connection at Hyperautomation → Integrations → SentinelOne SDL → Add Connection
 (Bearer token) BEFORE activating the workflow; activation otherwise fails 400 "requires configuration".
 
-## Posting a UAM SecurityAlert from an HA flow that actually SURFACES, tenant-validated 2026-06-22
+**HEC event-collector ingest is a different credential and a different connection.** A
+`POST {HEC_INGEST_URL}/services/collector/event` or `/raw` action takes an **SDL Log Write Key**, not
+the console token. A Hyperautomation connection passes its credential through verbatim as
+`Authorization: Bearer <value>`, so bind a second Bearer connection whose key value is the Log Write
+Key for the target account or site. The console token is refused with `HTTP 400 {"text":"Missing
+S1-Scope header","code":5}` where the write key returns `HTTP 200 {"text":"Success","code":0}`, and
+adding an `S1-Scope` header does not fix it. Send no `S1-Scope` header on collector actions: the key
+is minted for one account or site and that fixes the destination. `/v1/alerts` on the same host is
+the opposite case, see the UAM section below, so do not copy collector auth to it.
 
-Post ONE self-contained alert to `{HEC_INGEST_URL}/v1/alerts` (Bearer + `S1-Scope` headers). A
-separate `/v1/indicators` call is NOT needed, embed the indicator inline in
-`finding_info.related_events[]` (one round trip, no indicator-registration timing to get wrong). The
-two-call indicator-then-alert flow is fragile (the alert silently drops if the indicator uid hasn't
-registered). Fields the stitcher REQUIRES, or you get HTTP 202 but a SILENT DROP (no alert appears):
+## Posting a UAM SecurityAlert from an HA flow that actually SURFACES
+
+Post ONE self-contained alert to `{HEC_INGEST_URL}/v1/alerts` (Bearer + `S1-Scope` headers, using
+the console API token, which alert ingest still takes). Embed the indicator inline in
+`finding_info.related_events[]`: one round trip, no indicator-registration timing to get wrong.
+There is no two-call alternative any more, see below. Fields the stitcher REQUIRES, or you get
+HTTP 202 but a SILENT DROP (no alert appears):
 
 - **`class_uid` = `99602001`** ("S1 Security Alert") + `class_name:"S1 Security Alert"`,
   `type_uid:9960200101`, `type_name:"S1 Security Alert: Create"`. **Generic OCSF `class_uid` 2002 is
@@ -449,8 +459,42 @@ registered). Fields the stitcher REQUIRES, or you get HTTP 202 but a SILENT DROP
 - `metadata.version:"1.6.0-dev"`, `metadata.extension:{name:"s1",uid:"998",version:"0.1.0"}`,
   `metadata.product:{name,vendor_name}`, `logged_time`, `modified_time`.
 - `finding_info:{uid,title,desc,related_events:[...]}`. Each related_event needs `uid, class_uid,
-  type_uid, category_uid, activity_id, severity_id, time, message`, `observables[]` (each with BOTH
-  `type` AND `typeName`), and inline `device` + `actor.user`.
+  type_uid, category_uid, activity_id, severity_id, time, message` and `observables[]` (each with
+  BOTH `type` AND `typeName`).
+
+**What the related_events entry becomes in the console.** The entry IS the
+indicator: `alert.indicators` in UAM GraphQL, which is what the Indicators tab renders, is
+populated from `finding_info.related_events[]` with nothing sent to `/v1/indicators`. Per entry:
+
+| related_events field | renders as |
+|---|---|
+| `title` | `Indicator.title` |
+| `desc` | `Indicator.description` |
+| `message` | `Indicator.message` |
+| `severity_id` | `Indicator.severity`, resolved PER INDICATOR, independent of the alert envelope |
+| `observables[]` | `Indicator.observables`, `type_id` mapped to the UI enum (1 HOSTNAME, 2 IP, 4 USER_NAME, 5 EMAIL, 9 PROCESS_NAME, 10 RESOURCE_UID) |
+
+Add `title` and `desc`: without them the indicator renders with a null title and description.
+Multiple entries give multiple indicators on one alert. Inline `device` / `actor.user` /
+`metadata.profiles` on the entry, and an OCSF `evidences[]` array alongside it, were both tested
+and changed nothing, so do not bother carrying them.
+
+**Verify with the right field.** `alert(id){ indicators { type uid title description message
+severity observables { name value type } } }`. NOT `alertWithRawIndicators`: `rawIndicators` is a
+separate store fed only by `/v1/indicators`, so on this design it stays `[]`, which is expected and
+not a failure. Two teams have now chased that empty array as if it were a bug. Do not add `name` or
+`category` to that selection set: `Indicator` has neither, and either one fails the whole query with
+`Validation error (FieldUndefined@[alert/indicators/name]) : Field 'name' in type 'Indicator' is undefined`.
+(`indicator.name` and `indicator.category` are SDL PowerQuery fields on EDR behavioural-indicator
+events, an unrelated schema.)
+
+**Indicators cannot be ingested separately at all.** No credential drives `/v1/indicators`: the
+console API token that gets `202` from `/v1/alerts` gets `403 "User token not allowed for this
+endpoint"` there (it carries the claim `type: "user"`), `ApiToken` is `401` on both, and the SDL
+Log Write Key is `401` on both, being a key for the event collector rather than a Bearer JWT for
+`/v1/*`. If a flow still has the indicator POST with `continue_on_fail`, every run finishes
+`CompletedWithErrors` with `error_actions` empty, which reads as a broken flow and is not one.
+Delete the action.
 
 Reference builder: `s1-secops-mcp/lib/uam-ingest.js` `buildSecurityAlert({inline:true})`. The alert
 surfaces in UAM ~30-60s after the POST; poll `uam_list_alerts`.

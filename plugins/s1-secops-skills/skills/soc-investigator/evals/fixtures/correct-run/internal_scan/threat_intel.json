@@ -1,0 +1,12 @@
+{
+  "enrichment_status": "NOT APPLICABLE",
+  "reason": "Every indicator on this alert is RFC1918 or an internal account. External threat intelligence has no coverage of private address space, so no lookup was performed and none is reported.",
+  "indicators": [
+    { "value": "10.14.7.31", "type": "ip", "scope": "RFC1918 internal", "enrichment": "not applicable", "provider_result": null },
+    { "value": "10.14.7.44", "type": "ip", "scope": "RFC1918 internal", "enrichment": "not applicable", "provider_result": null },
+    { "value": "192.168.20.8", "type": "ip", "scope": "RFC1918 internal", "enrichment": "not applicable", "provider_result": null },
+    { "value": "CORP\\svc_backup", "type": "account", "scope": "internal directory account", "enrichment": "not applicable", "provider_result": null }
+  ],
+  "external_indicators_present": 0,
+  "lookups_performed": 0
+}

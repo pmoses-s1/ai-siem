@@ -1,0 +1,38 @@
+{
+  "action": {
+    "type": "http_request",
+    "tag": "integration",
+    "connection_id": null,
+    "connection_name": "",
+    "use_connection_name": false,
+    "integration_id": null,
+    "data": {
+      "name": "Ingest OCSF Batch",
+      "action_type": "http_request",
+      "method": "POST",
+      "url": "{{Connection.protocol}}{{Connection.url}}/services/collector/event?isParsed=true",
+      "use_authentication_data": true,
+      "public_action_id": null,
+      "payload": "{\"event\": {\"dataSource.name\": \"Acme Watchdog\", \"dataSource.vendor\": \"Acme\", \"dataSource.category\": \"security\", \"event.type\": \"ueba_silent_pair\", \"site_id\": \"{{local_var.site_id}}\", \"message\": \"{{local_var.summary}}\"}, \"sourcetype\": \"_json\"}",
+      "headers": []
+    },
+    "state": "active",
+    "description": null,
+    "client_data": {
+      "position": {
+        "x": 0.0,
+        "y": 760.0
+      },
+      "dimensions": {
+        "width": 256.0,
+        "height": 76.0
+      },
+      "collapsed": false
+    },
+    "snippet_workflow_id": null,
+    "snippet_version_id": null
+  },
+  "export_id": 3,
+  "connected_to": [],
+  "parent_action": null
+}

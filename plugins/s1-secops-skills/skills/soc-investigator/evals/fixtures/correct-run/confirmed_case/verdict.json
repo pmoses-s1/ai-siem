@@ -1,0 +1,13 @@
+{
+  "alert_id": "1770000000000000005",
+  "verdict": "TRUE POSITIVE",
+  "confidence": "confirmed",
+  "escalate": true,
+  "severity": "CRITICAL",
+  "gates_met": [
+    "threat intel: VirusTotal 38/72 malicious on 9f2c4a1b...",
+    "MDR confirmation: 'Confirmed malicious, endpoint contained.'",
+    "multi-source corroboration: Palo Alto Networks Firewall shows the same destination 203.0.113.77 outbound from CORP-DC-02"
+  ],
+  "asset_criticality": "domain controller"
+}

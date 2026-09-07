@@ -30,7 +30,8 @@ question at Step 4. Do not front-load a long form.
 
 ## Step 0: locate the source and decide if it is editable in SDL
 
-The editability of a source in SDL is decided by one signal: the `parser` attribute on its events.
+The editability of a source in SDL is decided by two signals on its events: the `parser` attribute
+and the `message` attribute. Start by enumerating the parser names in the tenant.
 
 ```text
 parser=* | group events=count() by parser | sort -events | limit 200
@@ -43,18 +44,27 @@ Then map parser to the source by pulling a sample. Because an un-normalised sour
 parser='<PARSER_NAME>' | sort -timestamp | limit 20
 ```
 
-Apply this rule before doing anything else:
+**Apply the parser-eligibility gate before doing anything else.** The SDL parser sees exactly two
+attributes on an event, `message` and `parser`. Everything else is invisible to it. The value of
+`parser` names which parser to apply, and it is applied to the content of `message`. Four cases
+follow, and they decide whether this onboarding builds a parser at all:
 
-| Observation | Meaning | Action |
+| `parser` | `message` | Action |
 |---|---|---|
-| `parser` attribute populated AND `message` populated | A parser of that name exists in SDL at `/logParsers/<parser>` and is editable, and there is raw text in `message` for it to operate on | Proceed. This is the normal onboarding path. |
-| `parser` populated but `dataSource.name` null/absent | The parser is landing the data but is not normalising it. This is the onboarding gap. | Proceed to Step 1: extend the parser to set the four mandatory attributes and OCSF. |
-| no `parser` attribute | No SDL parser is bound to these events, so SDL cannot parse or modify them | Stop. Tell the user the source cannot be onboarded in SDL as-is. Do not invent a parser. |
+| present | present | The SDL parser runs. Proceed to Step 1, the normal onboarding path. |
+| absent | present | The SDL parser cannot select a parser. Fix it in Data Pipeline Management (DPM) by setting a `parser` attribute on the event, then proceed. Usually the cheapest fix and the default recommendation. |
+| absent | absent | The SDL parser cannot be used at all. Parsing has to happen in DPM. Tell the user; do not invent a parser. |
+| n/a | n/a | Logs already parsed in DPM: events arrive pre-parsed with their fields promoted, so neither attribute needs to exist and no SDL parser is involved. Skip Step 1 and onboard from the promoted fields. |
 
-**Only the content of the `message` attribute can be parsed.** SDL parsers operate on `message`;
-field extraction, OCSF mapping, and enrichment all run off that raw text. A `parser` attribute being
-present means the data is editable even if it was parsed upstream, provided `message` is populated.
-If `message` is empty there is nothing to parse, even with a parser bound.
+An SDL parser cannot reach fields that live outside `message`, so a source whose fields are already
+promoted to top level is a DPM job, not a parser job, however the parser is written. Determine the
+case by inspecting a sample event for the presence of `message` and `parser`: the PowerQuery probes
+(`field = *` for presence, `!(field = *)` with the parentheses for absence) and the DPM fix are in
+`sdl-log-parser/references/parser-eligibility.md`.
+
+One more onboarding-specific reading: `parser` populated but `dataSource.name` null or absent means
+the parser is landing the data without normalising it. That is the onboarding gap, not a blocker.
+Proceed to Step 1 and extend the parser to set the four mandatory attributes and OCSF.
 
 If live discovery finds nothing, ask the user to upload a raw sample of the source's logs and
 proceed from the sample. Confirm the source is sending now (recent `timestamp` values), not a
@@ -276,7 +286,9 @@ the example normalised-and-enriched record, then hand off the rendered files.
   `dataSource.name` means the events were tagged with a sourcetype but never transformed. Creating
   the parser at that exact path normalises the live stream going forward, which is the core of the
   onboarding fix. The 404 is a "create me", not an error.
-- Do not assume the source is editable. The `parser`-attribute rule in Step 0 is the gate.
+- Do not assume the source is editable. The parser-eligibility gate in Step 0 decides it: a parser
+  sees only `message` and `parser`, so a missing `parser` attribute is a DPM fix and a missing
+  `message` means parsing has to happen in DPM entirely.
 - JSON-per-line flatten: `$unmapped.=json{parse=dottedJson}$` (dotted-prefix capture) then rename
   in `mappings`. A bare `$json{parse=json}$` emits no subfields. `mappings` needs `version: 1` and
   `transformations`.

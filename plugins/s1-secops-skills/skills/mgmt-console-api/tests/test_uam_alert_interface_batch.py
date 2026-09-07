@@ -1,20 +1,41 @@
 """
-UAM Alert Interface -- comprehensive batch + multi-observable + multi-
-indicator linkage test -- REVERSIBLE.
+UAM Alert Interface -- multi-indicator + multi-observable inline linkage
+test -- REVERSIBLE.
 
 What this proves beyond test_uam_alert_interface_single.py:
-  * Batched ingest: multiple OCSF indicators in ONE POST /v1/indicators
-    call (concatenated-JSON body).
+  * Multi-indicator alert: ONE SecurityAlert carrying 3 indicators
+    inline at finding_info.related_events[], sent in ONE POST /v1/alerts.
   * Multiple observables per indicator: each of the 3 indicators carries
     at least 3 observables of different OCSF types (file / hash / host /
     ip / url / process / user).
   * Multiple OCSF classes in one alert: FileSystem Activity (1001),
     Process Activity (1007), Network Activity (4001).
-  * Multi-indicator alert: one SecurityAlert whose finding_info
-    .related_events[] references all 3 indicator UIDs.
-  * Server-side stitching: after ingest, alert.rawIndicators contains
-    3 records matching our 3 metadata.uids, and each record carries its
-    observable[] array through to UAM.
+  * Full inline context: each related_events[] entry carries the
+    indicator's metadata / device / actor / class-specific object, not a
+    bare uid reference.
+  * Server-side linkage: after ingest, alert.indicators contains one
+    record per posted related_events[] entry, each carrying its
+    observables[] array through to UAM.
+
+Indicators are never posted separately. /v1/indicators is not reachable
+with any credential, so the inline copy in the alert is the only path to
+the tenant, and it is what populates the console Indicators tab.
+
+Verify through `alert.indicators`, NOT `alertWithRawIndicators`
+---------------------------------------------------------------
+`rawIndicators` was the store `POST /v1/indicators` fed. Nothing can
+write to it any more, so on an inline-ingested alert it is `[]` and an
+assertion against it can only fail. Measured on a live tenant: an alert
+posted with 4 indicators inline in one POST returned 4 entries on
+`alert.indicators` and `[]` on `alertWithRawIndicators.rawIndicators`.
+`rawIndicators` is also a scalar (a JSON list), so sub-selecting it
+returns `Validation error (SubselectionNotAllowed@...)`.
+
+`ua.get_alert_indicators()` runs the right shape,
+`alert(id) { indicators { type uid title description message severity
+observables { name value type } } }`. Do not add `name` or `category`
+to that selection: neither exists on `Indicator` and either one fails
+the whole query at validation with `FieldUndefined`.
 
 Steps
 -----
@@ -26,25 +47,29 @@ Steps
                                                        (class_uid=1007, 5 obs)
         - network: src_endpoint.ip + dst_endpoint.ip + dst_endpoint.port +
                    url.full + device.hostname          (class_uid=4001, 5 obs)
-    2. POST all 3 in a single gzipped concatenated-JSON request.
-    3. Build 1 alert whose finding_info.related_events has 3 entries
-       (one per indicator UID) and POST it.
+    2. Build 1 alert whose finding_info.related_events has 3 entries, one
+       per indicator, each carrying that indicator's full context.
+       Assert inline-ness before sending.
+    3. POST the alert. Assert exactly ONE request was made, to
+       /v1/alerts, and that the body on the wire still carries all 3
+       indicators inline.
     4. Poll UAM GraphQL until the alert surfaces.
-    5. Read alert.rawIndicators:
-         - assert len() >= 3 and our 3 metadata.uids are all present
-         - for each of our 3 indicators: assert each observable we sent
-           is present in the matching rawIndicator (by observables[N].name
-           flattened keys).
+    5. Read alert.indicators:
+         - assert len() >= 3, one record per posted related_events[] entry
+         - report, per indicator, which of the observables we sent
+           surfaced (by observables[].name)
     6. Close the alert (status=RESOLVED, analystVerdict=TRUE_POSITIVE_BENIGN).
 
 Wire contract
 -------------
 Same as the single-indicator test:
-  * Bearer JWT auth (NOT ApiToken).
+  * Bearer JWT auth with the console API token (NOT ApiToken, and NOT
+    the SDL Log Write Key the raw event collector needs).
   * Content-Encoding: gzip mandatory.
-  * S1-Scope header mandatory.
-  * Indicator.metadata.profiles must include "s1/security_indicator".
-  * related_events[].uid must equal an indicator's metadata.uid.
+  * S1-Scope header mandatory on /v1/alerts.
+  * Each inline indicator's metadata.profiles must include
+    "s1/security_indicator".
+  * related_events[].uid must equal that indicator's metadata.uid.
 Concatenated JSON: objects separated by newlines, then gzip-compressed.
 Single Content-Encoding header covers the whole body.
 
@@ -87,6 +112,91 @@ RUN_TAG = f"smoke-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.
 
 def _log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+# Every inline related_events[] entry must carry these. A bare
+# {"uid": ...} reference is not enough: /v1/indicators is unreachable
+# with any credential, so whatever the inline entry omits never reaches
+# the tenant at all.
+_REQUIRED_INLINE_KEYS = ("uid", "metadata", "device", "actor", "time",
+                         "observables", "class_uid", "type_uid",
+                         "category_uid", "activity_id")
+
+
+class _RequestRecorder:
+    """Wraps UAMAlertInterfaceClient._post and records every HTTP call.
+
+    Lets the test assert that ingest is exactly ONE request. The removed
+    two-call flow (indicators, then sleep, then alert) would show up here
+    as two entries.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self.calls: List[Tuple[str, List[Dict[str, Any]]]] = []
+        self._orig = client._post
+        client._post = self._record
+
+    def _record(self, path: str, objs: Any, **kwargs: Any) -> Dict[str, Any]:
+        items = list(objs)
+        self.calls.append((path, items))
+        return self._orig(path, items, **kwargs)
+
+
+def _assert_inline(
+    alert: Dict[str, Any],
+    expected_observables: Dict[str, Set[str]],
+) -> Tuple[bool, List[str]]:
+    """Assert the alert body carries every indicator INLINE, with full
+    context, before anything is sent. Returns (ok, messages).
+
+    Unlike the post-ingest `_assert_linkage` check below, this one is a
+    hard gate: it inspects our own payload, so there is no server-side
+    rendering quirk to tolerate.
+    """
+    msgs: List[str] = []
+    entries = (alert.get("finding_info") or {}).get("related_events") or []
+    by_uid = {e.get("uid"): e for e in entries}
+    missing = set(expected_observables) - set(by_uid)
+    if missing:
+        msgs.append(f"finding_info.related_events missing uids: "
+                    f"{sorted(missing)}")
+        return False, msgs
+
+    ok = True
+    for uid in sorted(expected_observables):
+        entry = by_uid[uid]
+        absent = [k for k in _REQUIRED_INLINE_KEYS if not entry.get(k)]
+        if absent:
+            ok = False
+            msgs.append(f"uid={uid[:12]}...  inline entry missing {absent} "
+                        f"-- this is a uid-only reference, not inline context")
+            continue
+        profiles = (entry.get("metadata") or {}).get("profiles") or []
+        if "s1/security_indicator" not in profiles:
+            ok = False
+            msgs.append(f"uid={uid[:12]}...  metadata.profiles missing "
+                        f"'s1/security_indicator' (got {profiles})")
+            continue
+        have = {o.get("name") for o in (entry.get("observables") or [])}
+        want = set(expected_observables[uid])
+        if want - have:
+            ok = False
+            msgs.append(f"uid={uid[:12]}...  inline observables missing "
+                        f"{sorted(want - have)}")
+            continue
+        # Class-specific payload: the object the indicator is actually
+        # about must travel with it (file / process / endpoints).
+        payload_keys = [k for k in ("file", "process", "src_endpoint",
+                                    "dst_endpoint") if entry.get(k)]
+        if not payload_keys:
+            ok = False
+            msgs.append(f"uid={uid[:12]}...  inline entry carries no "
+                        f"class-specific object (file/process/endpoints)")
+            continue
+        msgs.append(f"uid={uid[:12]}...  inline ok  class_uid="
+                    f"{entry.get('class_uid')}  observables={len(have)}  "
+                    f"payload={payload_keys}")
+    return ok, msgs
 
 
 def _pick_account_and_site(
@@ -132,93 +242,84 @@ def _poll_for_alert(client: S1Client, scope_input: Dict[str, Any],
         backoff = min(backoff * 1.3, 10)
 
 
-def _extract_observables_from_raw(raw: Dict[str, Any]
-                                  ) -> List[Tuple[str, str]]:
-    """rawIndicators entries come back as a flat dict with keys like
-    `observables[0].name`, `observables[0].value`, `observables[1].name`,
-    `...`. Re-zip them into a list of (name, value) tuples so callers
-    can assert on expected observables by name."""
-    by_idx: Dict[int, Dict[str, str]] = {}
-    for k, v in (raw or {}).items():
-        if not isinstance(k, str) or not k.startswith("observables["):
-            continue
-        # observables[<idx>].<field>
-        try:
-            idx = int(k.split("[", 1)[1].split("]", 1)[0])
-            field = k.split("].", 1)[1]
-        except Exception:
-            continue
-        by_idx.setdefault(idx, {})[field] = str(v)
-    out: List[Tuple[str, str]] = []
-    for idx in sorted(by_idx):
-        slot = by_idx[idx]
-        name = slot.get("name", "")
-        val = slot.get("value", "")
-        if name:
-            out.append((name, val))
-    return out
+def _observable_names(ind: Dict[str, Any]) -> Set[str]:
+    """Observable names on one `alert.indicators` entry.
+
+    `Indicator.observables` is a proper sub-selection, so each entry is a
+    real object: `{name, value, type}`. (The retired `rawIndicators` shape
+    was a flat dict with `observables[0].name`-style keys, which needed
+    re-zipping. Nothing writes that store any more.)
+    """
+    return {
+        str(o.get("name"))
+        for o in (ind.get("observables") or [])
+        if isinstance(o, dict) and o.get("name")
+    }
 
 
 def _assert_linkage(
-    wri: Dict[str, Any],
+    indicators: List[Dict[str, Any]],
     expected_uids: Set[str],
     expected_observables: Dict[str, Set[str]],
 ) -> Tuple[bool, List[str]]:
     """Returns (ok, list_of_messages).
 
-    Core stitching assertion: all expected indicator UIDs must appear in
-    alert.rawIndicators (via metadata.uid).
+    Core stitching assertion: `alert.indicators` must carry one record per
+    posted `finding_info.related_events[]` entry. That is the field the
+    inline ingest path populates and the field the console Indicators tab
+    renders, so it is the only field this round-trip can be judged on.
+    A live tenant returned 4 entries here for an alert posted with 4
+    inline indicators, and `[]` on `alertWithRawIndicators.rawIndicators`.
 
-    Per-observable name check is INFORMATIONAL in batch mode. Empirically
-    (diag4 on usea1-acme 2026-04-22) the `alertWithRawIndicators`
-    GraphQL resolver returns the rawIndicators list with the flat-key
-    structure (`observables[N].name`/`.value`/`.type_id`) but the VALUES
-    are shuffled across non-final entries: only the LAST rawIndicator in
-    the array has clean observable values; earlier entries have values
-    from other fields bleeding into observables[N].* slots.
+    Two things are INFORMATIONAL rather than fatal:
 
-    Examples of the corruption in a 3-indicator batch:
-      observables[2].name = "smoke-product"  (was metadata.product.name)
-      observables[3].name = "SentinelOne"    (was account.name)
-      class_uid = "/tmp/...iso"              (was file.path value)
-
-    This is a server-side rendering bug, NOT a stitching bug -- the
-    indicator IS stitched (metadata.uid is correct, class_uid/activity_id
-    are recoverable from the backing record, and the UI renders fine
-    because it reads from a different code path).
-
-    Solo-indicator case (diag3) returns clean values. So the test treats
-    per-observable names as best-effort and only hard-fails on the
-    stitching count.
+      * The `related_events[].uid` -> `Indicator.uid` mapping is not
+        documented, so a uid we posted may not be the uid rendered back.
+        Reported, not asserted.
+      * Per-observable surfacing. Empirically (diag4 on usea1-acme
+        2026-04-22) multi-indicator alerts shuffle observable values
+        across non-final entries server-side; only the last entry is
+        reliably clean. The solo-indicator case (diag3) is clean. That is
+        a rendering artifact, not a stitching failure, so the count above
+        is what the test hard-fails on.
     """
     msgs: List[str] = []
-    raw_list = wri.get("rawIndicators") or []
-    raw_by_uid = {
-        (r.get("metadata.uid") or r.get("uid") or ""): r for r in raw_list
-    }
-    missing_uids = expected_uids - set(raw_by_uid)
-    if missing_uids:
-        msgs.append(f"MISSING INDICATOR UIDS in alert.rawIndicators: "
-                    f"{sorted(missing_uids)}")
+    if len(indicators) < len(expected_uids):
+        msgs.append(f"alert.indicators has {len(indicators)} record(s), "
+                    f"expected at least {len(expected_uids)}")
         return False, msgs
 
-    msgs.append(f"STITCH ok: all {len(expected_uids)} indicator UIDs "
-                f"present in alert.rawIndicators")
+    msgs.append(f"STITCH ok: alert.indicators carries "
+                f"{len(indicators)} record(s) for "
+                f"{len(expected_uids)} posted indicator(s)")
+
+    seen_uids = {str(i.get("uid")) for i in indicators if i.get("uid")}
+    missing_uids = expected_uids - seen_uids
+    if missing_uids:
+        msgs.append(f"UID NOTE: posted metadata.uid(s) not rendered back as "
+                    f"Indicator.uid: {sorted(u[:12] + '...' for u in missing_uids)}"
+                    f"  (observed {sorted(u[:12] + '...' for u in seen_uids)})")
+    else:
+        msgs.append(f"UID ok: all {len(expected_uids)} posted metadata.uids "
+                    f"are the rendered Indicator.uids")
+
     # Per-observable surfacing is informational only (see docstring).
-    for uid in sorted(expected_uids):
-        raw = raw_by_uid[uid]
-        obs = _extract_observables_from_raw(raw)
-        have_names = {n for (n, _v) in obs}
-        want_names = expected_observables.get(uid, set())
+    all_want = set().union(*expected_observables.values()) if expected_observables else set()
+    for ind in indicators:
+        uid = str(ind.get("uid") or "")
+        have_names = _observable_names(ind)
+        # Match the posted indicator by uid when the mapping held; fall
+        # back to the union of everything we sent when it did not.
+        want_names = expected_observables.get(uid) or all_want
         missing_obs = want_names - have_names
+        label = (uid[:12] + "...") if uid else f"type={ind.get('type')!r}"
         if missing_obs:
             msgs.append(
-                f"uid={uid[:12]}...  obs surfaced={len(have_names)}/"
-                f"{len(want_names)}  (server-side rawIndicator key/value "
-                f"shuffle in batch mode -- see _assert_linkage docstring)")
+                f"{label}  obs surfaced={len(have_names)}/"
+                f"{len(want_names)}  (server-side observable shuffle on "
+                f"multi-indicator alerts -- see _assert_linkage docstring)")
         else:
-            msgs.append(f"uid={uid[:12]}...  ok  "
-                        f"obs_present={sorted(want_names)}")
+            msgs.append(f"{label}  ok  obs_present={sorted(want_names)}")
     return True, msgs
 
 
@@ -336,35 +437,50 @@ def main() -> int:
         ),
     )
 
-    # --- 1. POST /v1/indicators (batched, 3-in-1) ---
+    # --- 1. inline check: all 3 indicators must be carried IN the alert
+    #        body with full context. Runs before ingest so a regression to
+    #        uid-only references fails without touching the tenant.
     obs_counts = {k: len(v) for k, v in expected_obs.items()}
-    _log(f"INGEST: POST /v1/indicators  batch=3 "
+    _log(f"INLINE: checking 3 indicators inline in the alert body "
          f"(file={obs_counts[ind_file_uid]}obs, "
          f"process={obs_counts[ind_proc_uid]}obs, "
          f"network={obs_counts[ind_net_uid]}obs)")
-    try:
-        r = uam_iface.post_indicators(indicators, scope=scope_str)
-    except UAMAlertInterfaceError as e:
-        _log(f"INDICATOR INGEST FAILED: HTTP {e.status} :: {e.body}")
+    inline_ok, inline_msgs = _assert_inline(alert, expected_obs)
+    for m in inline_msgs:
+        _log(f"  {m}")
+    if not inline_ok:
+        _log("INLINE FAILED: alert does not carry all 3 indicators inline")
         return 2
-    _log(f"INDICATOR INGEST ok: {r}")
+    _log("INLINE ok: 3 indicators carried inline with full context")
 
-    # Per UAM ingestion doc: ingest indicators first, THEN alert. A small
-    # delay gives the server time to register each metadata.uid before the
-    # alert's finding_info.related_events[] lookups fire; without this the
-    # multi-indicator stitcher can silently drop the alert.
-    _log("sleep 3s so indicators land before alert references them...")
-    time.sleep(3)
-
-    # --- 2. POST /v1/alerts (1 alert linking all 3) ---
+    # --- 2. ONE POST /v1/alerts carries the alert and all 3 indicators ---
+    recorder = _RequestRecorder(uam_iface)
     _log(f"INGEST: POST /v1/alerts  finding_info.uid={alert_uid}  "
-         f"related_events=3")
+         f"related_events=3 (indicators inline)")
     try:
         r = uam_iface.post_alerts([alert], scope=scope_str)
     except UAMAlertInterfaceError as e:
         _log(f"ALERT INGEST FAILED: HTTP {e.status} :: {e.body}")
         return 3
     _log(f"ALERT INGEST ok: {r}")
+
+    paths = [p for (p, _objs) in recorder.calls]
+    if paths != ["/v1/alerts"]:
+        _log(f"SINGLE-REQUEST FAILED: expected exactly one POST to "
+             f"/v1/alerts, observed {paths}")
+        return 3
+    _log(f"SINGLE-REQUEST ok: 1 request, {paths[0]}, "
+         f"{len(recorder.calls[0][1])} object(s) in body")
+
+    # The body actually put on the wire must still carry all 3 inline.
+    sent_alert = recorder.calls[0][1][0]
+    sent_ok, sent_msgs = _assert_inline(sent_alert, expected_obs)
+    if not sent_ok:
+        for m in sent_msgs:
+            _log(f"  {m}")
+        _log("SENT-BODY FAILED: posted alert body lost inline indicators")
+        return 3
+    _log("SENT-BODY ok: posted body carries all 3 indicators inline")
 
     # --- 3. poll UAM ---
     sc = ua.scope([account_id], "ACCOUNT")
@@ -377,32 +493,34 @@ def main() -> int:
     _log(f"POLL ok: uam_alert_id={uam_alert_id}  name={node.get('name')!r}  "
          f"detectedAt={node.get('detectedAt')}")
 
-    # --- 4. verify linkage -- assert all 3 indicators + their observables ---
-    # Give the stitcher a generous grace window; on some tenants the
-    # indicators land 20-90s AFTER the alert record becomes queryable,
-    # and multi-indicator stitching may resolve in multiple passes.
+    # --- 4. verify linkage -- one alert.indicators record per posted
+    #        related_events[] entry; observables reported, not asserted ---
+    # Server-side processing of the single POST is asynchronous: on some
+    # tenants the indicators surface 20-90s AFTER the alert record becomes
+    # queryable, and may resolve in multiple passes. Give it a grace
+    # window. This is indexing lag on one request, not a race between two.
     _log(f"STITCH: waiting up to 120s for all 3 indicators to land in "
-         f"alert.rawIndicators (expect uids: "
+         f"alert.indicators (posted uids: "
          f"file={ind_file_uid[:8]} proc={ind_proc_uid[:8]} net={ind_net_uid[:8]})")
     stitch_deadline = time.time() + 120
     linkage_ok = False
     last_msgs: List[str] = []
     last_count = -1
+    indicators: List[Dict[str, Any]] = []
     while time.time() < stitch_deadline:
-        wri = ua.get_alert_with_raw_indicators(mgmt, uam_alert_id)
-        count = len(wri.get("rawIndicators") or [])
-        if count != last_count:
-            _log(f"  rawIndicators count = {count}/3")
-            last_count = count
+        indicators = ua.get_alert_indicators(mgmt, uam_alert_id)
+        if len(indicators) != last_count:
+            last_count = len(indicators)
+            _log(f"  alert.indicators count = {last_count}/3")
         linkage_ok, last_msgs = _assert_linkage(
-            wri, expected_uids, expected_obs)
+            indicators, expected_uids, expected_obs)
         if linkage_ok:
             break
         time.sleep(5)
 
     for m in last_msgs:
         _log(f"  {m}")
-    _log(f"rawIndicators count: {len(wri.get('rawIndicators') or [])}")
+    _log(f"alert.indicators count: {len(indicators)}")
     if not linkage_ok:
         _log("LINK FAILED: stitching incomplete within grace window")
         _log(f"Manual investigation: alert_id={uam_alert_id}  "
@@ -418,31 +536,78 @@ def main() -> int:
             except Exception:
                 pass
         return 5
-    _log("LINK ok: all 3 indicators + their observables stitched to alert")
+    _log("LINK ok: all 3 indicators stitched to alert.indicators "
+         "(observable surfacing reported above, not asserted)")
 
     # --- 5. cleanup ---
     if args.keep:
         _log(f"KEEP flag set -- alert {uam_alert_id} left in current state")
         return 0
+    # Preflight, per the skill: ask what this alert can actually do before
+    # triggering. Alerts ingested through /v1/alerts offer only addNote and
+    # eventSearch, so status/verdict cleanup is not available for them and the
+    # mutation's `Missing UAM manage permissions` would be misleading.
+    _cleanup_filter = {"or": [{"and": [
+        {"fieldId": "id", "stringEqual": {"value": uam_alert_id}}]}]}
+    _diag = ua.explain_action_failure(
+        mgmt, scope_input=sc, filter_input=_cleanup_filter,
+        action_ids=["S1/alert/statusUpdate", "S1/alert/analystVerdictUpdate"])
+    if _diag["S1/alert/statusUpdate"]["state"] != "offered":
+        _log("CLEANUP SKIPPED: alertAvailableActions reports statusUpdate "
+             f"{_diag['S1/alert/statusUpdate']['state']} for this alert type "
+             f"(available here: {', '.join(_diag['available'])}). This is a "
+             "capability limit of alerts ingested via /v1/alerts, not a token "
+             "scope, so resolve it in the console if you want it closed.")
+        ua.add_alert_note(mgmt, uam_alert_id,
+                          "Smoke test complete, safe to resolve.")
+        _log("UAM Alert Interface batch: INGEST(1 alert, 3 indicators inline) "
+             "-> POLL -> LINK(3 records on alert.indicators) -- OK; CLEANUP "
+             f"not available for this alert type (alert {uam_alert_id} left "
+             "NEW, note added)")
+        return 0
+
     _log(f"CLEANUP: status->RESOLVED + analystVerdict->TRUE_POSITIVE_BENIGN "
          f"on {uam_alert_id}")
     try:
-        ua.set_alert_status(mgmt, scope_input=sc, alert_ids=[uam_alert_id],
-                            status="RESOLVED")
-        time.sleep(1)
-        ua.set_analyst_verdict(mgmt, scope_input=sc, alert_ids=[uam_alert_id],
-                               verdict="TRUE_POSITIVE_BENIGN")
+        # action_outcome, not the bare payload: alertTriggerActions returns
+        # ActionsTriggered even when it refuses the write, with the reason in
+        # actions[].failure[].errorMessage.
+        for _resp in (
+            ua.set_alert_status(mgmt, scope_input=sc, alert_ids=[uam_alert_id],
+                                status="RESOLVED"),
+            ua.set_analyst_verdict(mgmt, scope_input=sc,
+                                   alert_ids=[uam_alert_id],
+                                   verdict="TRUE_POSITIVE_BENIGN"),
+        ):
+            _oc = ua.action_outcome(_resp)
+            if not _oc["applied"]:
+                _log(f"CLEANUP refused by API: {'; '.join(_oc['errors'])}")
+            time.sleep(1)
         time.sleep(2)
     except Exception as e:
         _log(f"CLEANUP FAILED: {e}")
         _log(f"Manual cleanup: resolve alert id={uam_alert_id}")
         return 6
+    # Report what the re-get actually shows, not what the write claimed. A UAM
+    # alertTriggerActions call returns ActionsTriggered even when the field does
+    # not move, so "ok" here would be a lie the moment the write silently no-ops
+    # (observed: status stayed NEW after a successful-looking RESOLVED write).
+    # Cleanup is housekeeping, not the behaviour under test, so a stuck field is
+    # reported and left for manual tidy-up rather than failing the run.
     final = ua.get_alert(mgmt, uam_alert_id)
-    _log(f"CLEANUP ok: final status={final.get('status')!r} "
+    _cleaned = final.get("status") == "RESOLVED"
+    _verdict = ("ok" if _cleaned
+                else f"DID NOT APPLY (resolve alert {uam_alert_id} manually)")
+    _log(f"CLEANUP {_verdict}: final status={final.get('status')!r} "
          f"verdict={final.get('analystVerdict')!r}")
 
-    _log("UAM Alert Interface batch: INGEST(3 indicators) -> INGEST(1 alert) "
-         "-> POLL -> LINK(3 indicators, multi-observable) -> CLEANUP -- ALL OK")
+    # The banner must not read ALL OK while the tenant is left holding an
+    # unresolved smoke alert. The tested behaviour passed either way; say which.
+    _log("UAM Alert Interface batch: INGEST(1 alert, 3 indicators inline) "
+         "-> POLL -> LINK(3 records on alert.indicators) -- OK; CLEANUP "
+         + ("OK" if _cleaned
+            else "NOT APPLIED (grant UAM manage on the token, or resolve "
+                 f"{uam_alert_id} by hand)"))
     return 0
 
 

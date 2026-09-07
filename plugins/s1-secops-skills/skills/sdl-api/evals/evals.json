@@ -1,0 +1,206 @@
+{
+  "skill_name": "sdl-api",
+  "evals": [
+    {
+      "id": 0,
+      "name": "parser-put-get-roundtrip",
+      "prompt": "Deploy this parser body to the SDL config file `claude_test_fortigate_kv` and then prove it stored correctly by reading it straight back. Write the script to `scripts/deploy_parser.py` and a result file `roundtrip.json` with exactly three keys: `before_version` (the version you read before writing), `after_version` (the version you read after), and `content_matches` (true if the content you read back is byte-identical to what you sent).",
+      "expected_output": "A read-then-write round-trip through the GraphQL config-file surface: `config_file(name=\"/logParsers/claude_test_fortigate_kv\")` first to capture the current `version`, then `put_config_file(name=..., content=..., expected_version=<that version>)`, then a second `config_file` read to confirm. `expected_version` is the concurrent-edit guard; a stale value is rejected with \"There are conflicting changes in the file.\" and leaves the stored content untouched. The path is `/logParsers/`, not `/parsers/`: the API accepts `/parsers/` but the console Log Parsers UI only reads `/logParsers/`, so a write there is invisible to the user. `content_matches` is true and `after_version` is greater than `before_version`.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "scripts/deploy_parser.py",
+          "pattern": "/logParsers/"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/deploy_parser.py",
+          "pattern": "expected_version"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/deploy_parser.py",
+          "pattern": "(?s)\\bconfig_file\\(.*?\\bput_config_file\\("
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/deploy_parser.py",
+          "pattern": "[\"']/parsers/",
+          "count": 0
+        },
+        {
+          "type": "json_parses",
+          "glob": "roundtrip.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "roundtrip.json",
+          "path": "content_matches",
+          "equals": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "roundtrip.json",
+          "path": "after_version",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "dashboard-write-by-udoid",
+      "prompt": "The console Configuration Files grid shows one of our dashboards as `/dashboards/id/6554761743556608/AI Usage`. I want to add a panel to it. Write the update script to `scripts/update_dashboard.py` and tell me what would go wrong if I did this the obvious way.",
+      "expected_output": "The display string is not a path. `6554761743556608` is the `udoId`; the file's real name is `/dashboards/AI Usage`. Reading the display string as a path returns \"no file exists at path\". The script reads with `config_file(udo_id=\"6554761743556608\")` and writes with `put_config_file(udo_id=..., content=..., expected_version=...)`. The obvious way, a name-addressed `addConfigFile` / `put_config_file(name=\"/dashboards/AI Usage\", ...)`, does not update in place for a dashboard: it creates a duplicate. That is how one tenant accumulated 152 copies of the same dashboard. Only `/dashboards/` files carry a udoId; lookups, datatables and logParsers are addressed by name.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "scripts/update_dashboard.py",
+          "pattern": "6554761743556608"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/update_dashboard.py",
+          "pattern": "config_file\\(\\s*udo_id\\s*="
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/update_dashboard.py",
+          "pattern": "expected_version"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/update_dashboard.py",
+          "pattern": "put_config_file\\(\\s*name\\s*=",
+          "count": 0
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)duplicate"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "ingest-credential-split",
+      "prompt": "I need to do two things to test a detection end to end: push 50 synthetic firewall events as raw logs into the data lake, and push one OCSF alert into Unified Alert Management. Which credential does each path use, and why does my console API token work for one and not the other? Write the raw-log ingest script to `scripts/ingest_firewall.py` and the credential explanation to `credentials_note.md`.",
+      "expected_output": "Two different paths with two different credentials. Raw log ingest goes to POST {S1_HEC_INGEST_URL}/services/collector/event and authenticates with an SDL Log Write Key carried in `S1_HEC_TOKEN`. The Management Console API token is refused there: on identical requests the write key returns HTTP 200 {\"text\":\"Success\",\"code\":0} and the console token returns HTTP 400 {\"text\":\"Missing S1-Scope header\",\"code\":5}. No S1-Scope header is sent for log ingest and sending one has no effect, because the write key is minted for exactly one account or site and that fixes the destination. UAM alert ingest at POST /v1/alerts on the same host is the other path and does use `S1_CONSOLE_API_TOKEN`, with Bearer auth and the S1-Scope header. The ingest script sends all three of `dataSource.name`, `dataSource.vendor` and `dataSource.category` as query params, with `dataSource.category` hard-coded to `security` so the event reaches the XDR pipeline where detections and Threat Intelligence matching run.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "credentials_note.md",
+          "pattern": "S1_HEC_TOKEN"
+        },
+        {
+          "type": "file_matches",
+          "glob": "credentials_note.md",
+          "pattern": "(?i)log\\s+write\\s+key"
+        },
+        {
+          "type": "file_matches",
+          "glob": "credentials_note.md",
+          "pattern": "S1_CONSOLE_API_TOKEN"
+        },
+        {
+          "type": "file_matches",
+          "glob": "credentials_note.md",
+          "pattern": "/v1/alerts"
+        },
+        {
+          "type": "file_matches",
+          "glob": "credentials_note.md",
+          "pattern": "S1-Scope"
+        },
+        {
+          "type": "file_matches",
+          "glob": "credentials_note.md",
+          "pattern": "(?i)(?:refus|reject)"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/ingest_firewall.py",
+          "pattern": "dataSource\\.category=security"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "asset-schema-discovery",
+      "prompt": "I am building a dashboard on top of `dataSource.name='asset'` and I need the real field list, not a guess. Discover the schema live, write the script to `scripts/discover_asset_schema.py` and the result to `schema.json` as an object keyed by data source name with a sorted array of field names as the value. Tell me how many fields it actually carries and what the agent UUID field is called.",
+      "expected_output": "PowerQuery is the wrong tool for discovery: its default projection returns only `timestamp` and `message`, and `| columns *` returns HTTP 500, so probing requires already knowing the field names. The V1 `query` method is used instead, because it returns each match as full event JSON with every populated attribute keyed in an `attributes` dict; the script reads `matches[0][\"attributes\"].keys()`. `asset` carries 126 fields. The agent UUID is `device.agent.uuid`; a bare `agent.uuid` does not exist on this source, and neither do `entity.uid` or `agent.health.online`.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "scripts/discover_asset_schema.py",
+          "pattern": "\\.query\\("
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/discover_asset_schema.py",
+          "pattern": "attributes"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/discover_asset_schema.py",
+          "pattern": "columns\\s*\\*",
+          "count": 0
+        },
+        {
+          "type": "json_parses",
+          "glob": "schema.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "schema.json",
+          "path": "asset.0",
+          "exists": true
+        },
+        {
+          "type": "output_matches",
+          "pattern": "device\\.agent\\.uuid"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\\b\\d{2,4}\\s+fields\\b"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "listing-disagrees-with-console",
+      "prompt": "I ran listFiles against SDL and got 1,914 paths back, but the Configuration Files grid in the console shows 2,264. One of the dashboards I need is in the console but getFile returns 404 on it. Which number is right, and how do I get the full list? Put your answer in `answer.md`.",
+      "expected_output": "The console is right and the REST listing is incomplete by design. The legacy REST endpoints (/api/listFiles, /api/getFile, /api/putFile) cannot see udoId-addressed `/dashboards/` files, which is the entire 350-file gap, and REST getFile on any of them returns success/noSuchFile. The canonical config-file surface is GraphQL `configFiles` / `configFile` at POST /sdl/v2/graphql. The rule is that a listing disagreeing with the UI is wrong until proven otherwise: change read path before concluding the file is absent or the token lacks scope. Note also that S1-Scope changes which files exist as far as the caller can tell.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "/sdl/v2/graphql"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "configFiles"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "(?i)udoid"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "/dashboards/"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "(?i)\\bREST\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "(?i)(?:incomplete|under-?report)"
+        }
+      ]
+    }
+  ]
+}

@@ -123,7 +123,12 @@ def rule_P02_hyphen_arith(query: str) -> Optional[Tuple[str, str]]:
     # contexts: `| let`, `| group`, and `| columns` segments (all three accept
     # computed expressions where the PQ parser reads `a-b` as one identifier).
     # String literals are stripped first to avoid false-flagging hyphenated labels.
-    for m in re.finditer(r"\|\s*(?:let|group|columns)\s+(.+?)(?:\||$)", query, flags=re.IGNORECASE | re.DOTALL):
+    #
+    # The segment terminator is a LOOKAHEAD, not a consumed `|`. Consuming it ate
+    # the pipe that starts the next expression stage, so in the common
+    # `... | group ... | let spread = max-min` shape only the `group` segment was
+    # ever scanned and the `let` went unchecked.
+    for m in re.finditer(r"\|\s*(?:let|group|columns)\s+(.+?)(?=\||$)", query, flags=re.IGNORECASE | re.DOTALL):
         expr = _strip_string_literals(m.group(1))
         if re.search(r"[A-Za-z_][A-Za-z0-9_.]*-[A-Za-z_][A-Za-z0-9_.]*", expr):
             return ("P02", "Hyphenated arithmetic without spaces (e.g. `total-min`). "

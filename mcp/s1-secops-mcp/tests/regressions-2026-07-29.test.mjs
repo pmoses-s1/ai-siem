@@ -86,14 +86,38 @@ test('sdlToken: returns the console API token', () => {
   }
 });
 
-test('sdlToken: throws an actionable error when the token is absent', () => {
-  const saved = process.env.S1_CONSOLE_API_TOKEN;
-  delete process.env.S1_CONSOLE_API_TOKEN;
-  try {
-    assert.throws(() => sdlToken(), /S1_CONSOLE_API_TOKEN not configured/);
-  } finally {
-    if (saved !== undefined) process.env.S1_CONSOLE_API_TOKEN = saved;
-  }
+test('sdlToken: throws an actionable error when the token is absent', async () => {
+  // Runs in a CHILD PROCESS on purpose.
+  //
+  // credentials.js resolves the credentials file ONCE, at module import
+  // (`const _file = discoverCredentials()`), and discovery walks up from cwd as
+  // well as reading env vars. So no amount of deleting process.env inside this
+  // process can make the token absent: the file still supplies it. The original
+  // version of this test asserted an exception that could only be thrown on a
+  // machine with no credentials configured anywhere, i.e. the one environment
+  // where the error message does not matter. It passed by accident in CI and
+  // failed the moment anyone ran the suite on a working machine.
+  //
+  // A fresh process with a scrubbed environment and a neutral cwd is the only
+  // honest way to test "credential missing" for a module that caches discovery
+  // at import time.
+  const { execFileSync } = await import('node:child_process');
+  const here = new URL('.', import.meta.url).pathname;
+  const src = `
+    import { sdlToken } from '${here}../lib/sdl.js';
+    try { sdlToken(); console.log('NO_THROW'); }
+    catch (e) { console.log('THREW:' + e.message); }
+  `;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', src], {
+    cwd: '/',
+    env: { PATH: process.env.PATH, HOME: '/nonexistent',
+           S1_CREDS_FILE: '/nonexistent/creds.json',
+           COWORK_WORKSPACE: '/nonexistent',
+           CLAUDE_CONFIG_DIR: '/nonexistent' },
+    encoding: 'utf-8',
+  }).trim();
+  assert.match(out, /^THREW:/, `expected a throw, got: ${out}`);
+  assert.match(out, /S1_CONSOLE_API_TOKEN not configured/);
 });
 
 // ─── hecIngest Content-Type per endpoint (mocked fetch, no network) ──────────
@@ -104,25 +128,97 @@ test('sdlToken: throws an actionable error when the token is absent', () => {
 
 test('hecIngest: /event posts application/json, /raw posts text/plain', async () => {
   process.env.S1_HEC_INGEST_URL = 'https://ingest.example.invalid';
-  process.env.S1_CONSOLE_API_TOKEN = 'tok';
+  process.env.S1_HEC_TOKEN = 'write-key';
   const seen = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
-    seen.push({ url, contentType: opts.headers['Content-Type'] });
+    seen.push({ url, headers: opts.headers, contentType: opts.headers['Content-Type'] });
     return new Response(JSON.stringify({ text: 'Success', code: 0 }), {
       status: 200, headers: { 'Content-Type': 'application/json' },
     });
   };
   try {
     const { hecIngest } = await import('../lib/hec.js');
-    await hecIngest('{"time":123,"event":"x"}', { scope: 'a', endpoint: 'event' });
-    await hecIngest('plain line', { scope: 'a', endpoint: 'raw' });
+    await hecIngest('{"time":123,"event":"x"}', { endpoint: 'event' });
+    await hecIngest('plain line', { endpoint: 'raw' });
     assert.equal(seen[0].contentType, 'application/json');
     assert.equal(seen[1].contentType, 'text/plain');
   } finally {
     globalThis.fetch = realFetch;
     delete process.env.S1_HEC_INGEST_URL;
+    delete process.env.S1_HEC_TOKEN;
+  }
+});
+
+// ─── log ingest uses the SDL Log Write Key, and sends no scope ───────────────
+// Measured on a live tenant: the write key returns 200 with no S1-Scope header,
+// while the console token on the identical request returns 400 "Missing S1-Scope
+// header". The key is minted per account/site and fixes the destination, so
+// there is nothing for a scope header to override.
+
+test('hecIngest: authenticates with S1_HEC_TOKEN, not the console token', async () => {
+  process.env.S1_HEC_INGEST_URL = 'https://ingest.example.invalid';
+  process.env.S1_HEC_TOKEN = 'write-key';
+  process.env.S1_CONSOLE_API_TOKEN = 'console-token-must-not-be-used';
+  let auth;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    auth = opts.headers.Authorization;
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const { hecIngest } = await import('../lib/hec.js');
+    await hecIngest('line', { endpoint: 'raw' });
+    assert.equal(auth, 'Bearer write-key');
+    assert.ok(!/console-token/.test(auth), 'the console token must never reach the collector');
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.S1_HEC_INGEST_URL;
+    delete process.env.S1_HEC_TOKEN;
     delete process.env.S1_CONSOLE_API_TOKEN;
+  }
+});
+
+test('hecIngest: sends no S1-Scope header, even when a scope is passed', async () => {
+  process.env.S1_HEC_INGEST_URL = 'https://ingest.example.invalid';
+  process.env.S1_HEC_TOKEN = 'write-key';
+  let headers;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    headers = opts.headers;
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const { hecIngest } = await import('../lib/hec.js');
+    // A caller written against the old signature still passes scope. It must be
+    // ignored rather than sent: an empty or wrong scope is a different request
+    // to no scope at all.
+    await hecIngest('line', { endpoint: 'raw', scope: '123456:789' });
+    assert.ok(!('S1-Scope' in headers), `S1-Scope must not be sent, got ${JSON.stringify(headers)}`);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.S1_HEC_INGEST_URL;
+    delete process.env.S1_HEC_TOKEN;
+  }
+});
+
+test('hecIngest: a missing write key names the credential and where to mint it', async () => {
+  const saved = { url: process.env.S1_HEC_INGEST_URL, tok: process.env.S1_HEC_TOKEN,
+                  f: process.env.S1_CREDS_FILE, w: process.env.COWORK_WORKSPACE, c: process.env.CLAUDE_CONFIG_DIR };
+  process.env.S1_HEC_INGEST_URL = 'https://ingest.example.invalid';
+  delete process.env.S1_HEC_TOKEN;
+  process.env.S1_CREDS_FILE = '/nonexistent/creds.json';
+  process.env.COWORK_WORKSPACE = '/nonexistent';
+  process.env.CLAUDE_CONFIG_DIR = '/nonexistent';
+  try {
+    const { hecIngest } = await import('../lib/hec.js');
+    await assert.rejects(() => hecIngest('line', { endpoint: 'raw' }),
+      /S1_HEC_TOKEN not configured[\s\S]*Log Write Key/);
+  } finally {
+    for (const [k, v] of Object.entries({ S1_HEC_INGEST_URL: saved.url, S1_HEC_TOKEN: saved.tok,
+        S1_CREDS_FILE: saved.f, COWORK_WORKSPACE: saved.w, CLAUDE_CONFIG_DIR: saved.c })) {
+      if (v !== undefined) process.env[k] = v; else delete process.env[k];
+    }
   }
 });
 

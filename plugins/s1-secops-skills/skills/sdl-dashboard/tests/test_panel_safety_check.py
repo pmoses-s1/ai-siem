@@ -7,9 +7,9 @@ Run: python3 -m unittest discover -s sdl-dashboard/tests -v
 Stdlib only, no tenant and no credentials.
 
 Why S01/S02 exist, measured on <console> 2026-08-17 for site Metacortex
-(id 2547662415802335157):
+(id 9876543210987654321):
 
-    site.id='2547662415802335157'                    -> 60,410 events
+    site.id='9876543210987654321'                    -> 60,410 events
     site.id='...' AND site.name is null              ->    510 events
       of which: ActivityFeed 172, asset 111, (null source) 99,
                 SentinelOne 70, Windows Event Logs 48, alert 10
@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import panel_safety_check as psc  # noqa: E402
 
-SITE_ID = "2547662415802335157"
+SITE_ID = "9876543210987654321"
 OTHER_SITE_ID = "2175066823985525506"
 
 

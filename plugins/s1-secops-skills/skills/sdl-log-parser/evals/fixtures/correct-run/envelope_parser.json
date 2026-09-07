@@ -1,0 +1,37 @@
+// JSON body behind a `<timestamp> <host> app:<name>` envelope.
+// Deployed as /logParsers/acme_auth_envelope.
+//
+// Sample line the parser targets:
+//   2026-04-20T10:25:34.123Z host-7 app:auth {"user":"carol","action":"login","result":"success","meta":{"ip":"10.0.0.5","country":"US","mfa":true}}
+//
+// Extraction plan:
+//   ts_raw + host + app come off the prefix, then the body is flattened with
+//   dottedJson so meta.ip, meta.country and meta.mfa are queryable as fields.
+
+{
+  attributes: {
+    // Required pipeline defaults.
+    "metadata.version":    "1.0.0",
+    "dataSource.category": "security",
+    "dataSource.name":     "Acme Auth",
+    "dataSource.vendor":   "Acme",
+    dataset: "acme_auth"
+  },
+
+  patterns: {
+    iso: "\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z"
+  },
+
+  formats: [
+    // The body capture uses an EMPTY field name. That keeps user, action and
+    // result at the top level and flattens the nested object to meta.ip,
+    // meta.country and meta.mfa. Giving the capture a name would prefix every
+    // field with that name instead.
+    {
+      id: "json-envelope",
+      format: "$ts_raw=iso$ $host$ app:$app$ ${parse=dottedJson}$",
+      discardAttributes: ["message"],
+      halt: true
+    }
+  ]
+}

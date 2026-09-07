@@ -1,0 +1,42 @@
+dash.json written: a markdown header tile followed by one number panel.
+
+The blank tiles were two separate defects stacked on each other. The body was under `content:`,
+which the renderer ignores, so the tile mounted and drew nothing with no error anywhere. And the
+tile had no `title` key, which is what renders the header as "Untitled" on S-26.1. Both are fixed
+here: the prose lives under `markdown:` and the tile carries a short plain-text title. The number
+panel terminates with `| limit 1` so the engine stops scanning once the single row is computed,
+and both panels carry explicit x/y/w/h.
+
+panel.json written. Two mistakes, both in the last two attempts:
+
+  1. `transpose` is the terminal command of a PowerQuery pipeline. The `| limit 20` after it is
+     what produced "transpose can only be used as the last command in a query". Any limit, sort
+     or filter has to run before the transpose.
+  2. The bucket did not match the window. A `timebucket('10m')` over 7 days is 1,008 points per
+     series, which is why the tab crawled. Over 7d, 1h is the minimum bucket.
+
+The panel is stacked_bar with xAxis time, not area: an area panel driven by a `query` field spins
+indefinitely because area is built around the `plots:` pattern.
+
+queries/spread.pq written. The PowerQuery parser reads `max-min` and `total-min` as single
+hyphenated identifiers rather than as subtraction, which is exactly why the error names an
+identifier and not a field. Put spaces around every arithmetic minus: `max - min` and
+`(total - min) / total`. `| sort -spread` is the descending-sort prefix, not arithmetic, and
+stays as it is.
+
+site_dash.json written, both panels scoped with site.id. Ran the pre-deploy check:
+
+  $ python3 scripts/panel_safety_check.py site_dash.json --site-id 9876543210987654321
+  OK: panel_safety_check passed for site_dash.json (no issues).
+  exit status 0
+
+site.name was not used as the scoping predicate: on a measured site, 510 of 60,410 events carry
+the site id with a null site.name, including 10 alert and 111 asset records, and a site.name
+filter drops them silently.
+
+fixed_panel.json written. Three defects, not one:
+
+  1. graphStyle was area with a `query` field, which is the indefinite spinner. Switched to
+     stacked_bar with xAxis time; the query body is unchanged by that switch.
+  2. `| limit 20` sat after `| transpose`. Removed.
+  3. timebucket('10m') over a 7 day window is about a thousand points per series. Raised to 1h.

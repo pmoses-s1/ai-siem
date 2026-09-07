@@ -11,7 +11,7 @@ description: >-
 > REST `listFiles` / `getFile` **cannot see** udoId-addressed `/dashboards/` files, so `getFile`
 > returns `404` on a dashboard the console is displaying and the listing under-reports (measured on
 > one tenant: REST 8, GraphQL 17, console 48 files). **If a listing disagrees with what the UI
-> shows, the listing is wrong until proven otherwise** — change read path before concluding the
+> shows, the listing is wrong until proven otherwise**, change read path before concluding the
 > object is missing or the token lacks scope. Use the GraphQL `configFiles` / `configFile` surface.
 > A name-addressed `addConfigFile` to `/dashboards/` **creates a duplicate** instead of updating;
 > address dashboards by `udoId` with `expectedVersion`. `content` is HJSON, not JSON. `S1-Scope`
@@ -264,6 +264,117 @@ These three blur together. Quick rules:
 - **Union**: heterogeneous result sets that you want stacked as rows, possibly with rename/unification. Handy when the same logical event lives in two different log sources with different field names.
 
 Prefer subqueries for exclusion/inclusion; reach for `join` when a row must "know" multiple things at once.
+
+## Detection engineering
+
+Read this before writing any rule. Choosing the wrong `queryType` is the most
+expensive mistake available here, because the rule usually still deploys and
+still fires; it just fires on the wrong thing, or fires with no asset attached.
+
+### Which rule type
+
+| | Real time | Window | Body | Fits |
+|---|---|---|---|---|
+| **Single event** (`events`) | yes | none | one boolean S1QL filter, no pipes | one event is damning on its own |
+| **Correlation** (`correlation`) | yes | short, minutes to hours | `correlationParams`, no PQ | several events that only mean something together |
+| **Scheduled** (`scheduled`) | no | long, up to 14 days | PowerQuery, pipes allowed | aggregation, baselines, lookups, low-and-slow |
+
+**Prefer `scheduled` unless you need real time.** It is the only type that takes a
+PowerQuery body, so it is the only one that can aggregate, join, threshold on a
+computed value, or exclude via a lookup. It is also the only type where you
+control the entity binding, which decides whether the alert names an asset or
+says "Unknown Device". On a live tenant this preference is what practitioners
+already act on: of 87 rules, **74 were scheduled, 9 single-event, 4 correlation**,
+and 67 of the 74 scheduled rules carried an explicit entity mapping.
+
+Reach past `scheduled` only when the answer is genuinely "I cannot wait for the
+next run":
+
+- **Single event** when one event is a finding by itself, and latency matters.
+  No window, no aggregation, no exceptions list beyond what the filter expresses.
+- **Correlation** when the finding is "A and B within N minutes, keyed by the
+  same thing", the parts are individually boring, and you need it as it happens.
+
+### Entity binding decides whether the alert is usable
+
+This is the practical reason to prefer `scheduled`, and it splits by type:
+
+- `events`: the entity is taken from the matched event, **when the event carries a
+  device identity the console can reconcile against inventory**. EDR telemetry
+  does. Third-party data ingested over the event collector generally does not, and
+  then the alert says "Unknown Device" with nothing you can configure to fix it.
+- `correlation`: the entity is whatever you correlate on. `entityMappings` is
+  **not** used and reads back as `null` on every correlation rule.
+- `scheduled`: **nothing is bound unless you say so**, and that is the advantage.
+  Project the column in the query body, then name that exact output column in
+  top-level `entityMappings`. See `references/detection-rules.md`.
+
+Measured end to end on one tenant, same ingested events, two rules firing off them:
+
+| Rule | Alert asset |
+|---|---|
+| `events` on collector-ingested data | `Unknown Device` |
+| `scheduled` with `entityMappings: [{"columnName": "probe_host"}]` | the real hostnames |
+
+That is the whole argument for preferring `scheduled` on non-EDR sources: it is
+the only type where you can make the alert name the asset. `tools/e2e_detection_rules.py`
+reproduces this.
+
+### Correlation keys, including a custom one
+
+`correlationParams` carries the whole logic; `s1ql` stays empty.
+
+- `subQueries[]` is what makes correlation multi-event. Each entry is
+  `{matchesRequired, subQuery}`. One sub-query with `matchesRequired: N` is a
+  threshold; several sub-queries is a multi-stage detection.
+- `matchInOrder: true` makes it a sequence (1, then 2); `false` matches in any order.
+- `timeWindow.windowMinutes` bounds the whole thing.
+- `entity` is the correlation key. Built-in values such as `user` and `ip` group
+  by that identity.
+
+For a key the built-ins do not cover, set `entity: "custom"` and supply
+`entitiesAndFields`, **a list of lists, one inner list per sub-query, matched
+positionally**:
+
+```json
+"correlationParams": {
+  "entity": "custom",
+  "entitiesAndFields": [ ["src.process.parent.storyline.id"],
+                         ["tgt.process.storyline.id"] ],
+  "matchInOrder": false,
+  "timeWindow": {"windowMinutes": 10},
+  "subQueries": [
+    {"matchesRequired": 1, "subQuery": "event.type='Process Creation'"},
+    {"matchesRequired": 1, "subQuery": "event.type='IP Connect'"}
+  ]
+}
+```
+
+That reads as "correlate sub-query 1's `src.process.parent.storyline.id` against
+sub-query 2's `tgt.process.storyline.id`", which is how you join two different
+field paths that hold the same identity.
+
+Three things the API rejects, each confirmed by the error it returns:
+
+- the field is `entitiesAndFields`, not `customEntityKey` (`Unknown field`)
+- it is a list of lists; a flat list of strings fails with `Not a valid list` on element 0
+- **aliases must be unique across the whole structure.** Repeating the same field
+  path in two inner lists gives `entityFields contains duplicate alias(es)`. Two
+  sub-queries correlating on the same logical identity must name it by two
+  different field paths.
+
+Creating a rule at a scope above your token's returns
+`can not create rule with higher scope`; pass `filter.accountIds` rather than
+`filter.tenant` when the token is account-scoped.
+
+### Before you deploy
+
+1. Run the body as a hunt first. A scheduled body that errors is a rule that never fires.
+2. For `scheduled`, confirm the entity column exists in the output **and** is named in `entityMappings`.
+3. Confirm the rule is `Active` before ingesting test data; a Draft rule silently matches nothing.
+4. Validate by triggering a real alert, not by reading the rule back. Creation succeeding says nothing about whether it fires.
+
+API shapes, limits, patterns, and the deployment recipe: `references/detection-rules.md`.
 
 ## Writing detection rules vs ad-hoc hunts
 

@@ -113,10 +113,13 @@ for triage and keeps row size small.
 
 ## 5. Find a specific indicator by name (UAM -> SDL crosscheck)
 
-When you've ingested an indicator via `UAMAlertInterfaceClient.post_indicators`
-and want to confirm it landed in the data lake (not just in the UAM
-console), grep for it by name or by the `run_tag` substring your
-smoke test bakes in.
+When you've ingested an alert via `UAMAlertInterfaceClient.post_alerts`,
+with its indicators inline in `finding_info.related_events[]`, and want to
+check whether anything landed in the data lake (not just in the UAM
+console), grep by name or by the `run_tag` substring your smoke test bakes
+in. Note that `indicator.name` and `indicator.category` here are SDL fields
+on EDR behavioural-indicator events; they are not the UAM GraphQL
+`Indicator` type, which has neither field.
 
 ```text
 indicator.name = *

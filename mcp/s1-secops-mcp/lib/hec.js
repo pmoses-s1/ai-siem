@@ -10,8 +10,16 @@
  *   Host      : S1_HEC_INGEST_URL (e.g. https://ingest.us1.sentinelone.net)
  *   Endpoints : /services/collector/raw   (raw text, recommended for logs)
  *               /services/collector/event (structured JSON)
- *   Auth      : Authorization: Bearer <S1_CONSOLE_API_TOKEN> (the same Management Console API token the other tools use)
- *   Scope     : S1-Scope header is REQUIRED (accountId or accountId:siteId). Without it HEC returns 400 "Missing S1-Scope header".
+ *   Auth      : Authorization: Bearer <S1_HEC_TOKEN>, an SDL Log Write Key. NOT the
+ *               Management Console API token: the collector refuses a user token.
+ *               Mint one at Console > Singularity Data Lake > API Keys > Log Write Key;
+ *               no API creates one.
+ *   Scope     : NONE. A Log Write Key is minted for one account or site and writes only
+ *               there, so the key itself fixes the destination and the S1-Scope header is
+ *               neither required nor honoured. Measured on a live tenant: the write key
+ *               returns 200 with no S1-Scope header at all, while the console token on the
+ *               same request returns 400 "Missing S1-Scope header". To write somewhere
+ *               else, use a key minted for that scope.
  *   Parser    : ?sourcetype=<parserName> query param. Other query params become fields in the UI.
  *   Pre-parsed: /event with ?isParsed=true indexes already-structured JSON fields directly, with no SDL parser.
  *   Compress  : optional "Content-Encoding: gzip" (or zstd), recommended, lowers egress cost.
@@ -36,9 +44,15 @@ function hecBase() {
 }
 
 function hecToken() {
-  const tok = getCreds().S1_CONSOLE_API_TOKEN;
+  const tok = getCreds().S1_HEC_TOKEN;
   if (!tok) {
-    throw new Error('S1_CONSOLE_API_TOKEN not configured. HEC uses the same Management Console API token as the Bearer.');
+    throw new Error(
+      'S1_HEC_TOKEN not configured. Log ingest needs an SDL Log Write Key, not the ' +
+      'Management Console API token: the event collector refuses a user token. ' +
+      'Mint one at Console > Singularity Data Lake > API Keys > Log Write Key ' +
+      '(no API creates one) and set S1_HEC_TOKEN. The key is scoped to one account or ' +
+      'site and writes only there.'
+    );
   }
   return tok;
 }
@@ -54,7 +68,10 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
  * @param {object} [opts.fields]    Extra {key: value} pairs -> query params, each becomes a UI field.
  *                              Avoid HEC-reserved keys (event, time, host, source, sourcetype, index, fields):
  *                              HEC interprets those, they are not stored as custom fields. Use `parser` (not a field) to set sourcetype. (S-26.1 HEC docs, p.4708.)
- * @param {string} opts.scope       REQUIRED. accountId or "accountId:siteId" -> S1-Scope header. HEC returns 400 "Missing S1-Scope header" without it.
+ * @param {string} [opts.scope]     IGNORED, accepted only so existing callers do not break.
+ *                              The S1-Scope header is not sent: the Log Write Key already
+ *                              determines the destination and the collector does not honour
+ *                              an override. Passing one has no effect.
  * @param {('raw'|'event')} [opts.endpoint='raw']
  *                              For 'event', logContent must be newline-separated HEC JSON envelopes:
  *                              {"time": <epoch seconds>, "event": <string|object>, "fields": {...}}.
@@ -67,14 +84,12 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
  * @returns {Promise<{status:number, endpoint:string, url:string, body:any}>}
  */
 export async function hecIngest(logContent, { parser, fields = {}, scope, endpoint = 'raw', compress = true, isParsed = false } = {}) {
+  void scope; // accepted and deliberately unused; see the param doc above.
   if (typeof logContent !== 'string' || logContent.length === 0) {
     throw new Error('hecIngest: logContent must be a non-empty string.');
   }
   if (endpoint !== 'raw' && endpoint !== 'event') {
     throw new Error("hecIngest: endpoint must be 'raw' or 'event'.");
-  }
-  if (!scope || typeof scope !== 'string') {
-    throw new Error('hecIngest: scope is required. HEC rejects requests without an S1-Scope header (400 "Missing S1-Scope header"). Pass an accountId or "accountId:siteId".');
   }
 
   const qs = new URLSearchParams();
@@ -101,7 +116,8 @@ export async function hecIngest(logContent, { parser, fields = {}, scope, endpoi
     'Content-Type': endpoint === 'event' ? 'application/json' : 'text/plain',
   };
   if (compress) headers['Content-Encoding'] = 'gzip';
-  headers['S1-Scope'] = scope;
+  // No S1-Scope. The Log Write Key fixes the destination; sending a scope does not
+  // move the events and an empty one is a different request to none at all.
 
   let delay = 1000;
   let lastErr;

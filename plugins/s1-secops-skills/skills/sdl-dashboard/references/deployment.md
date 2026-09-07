@@ -24,8 +24,8 @@ Three routes. Pick by what you need, not by habit.
 from sdl_client import SDLClient
 
 client = SDLClient()
-ACCOUNT_ID = "2046190533732727925"
-SITE_ID    = "2547662415802335157"
+ACCOUNT_ID = "1234567890123456789"
+SITE_ID    = "9876543210987654321"
 SITE_SCOPE = f"{ACCOUNT_ID}:{SITE_ID}"
 
 created = client.create_dashboard(

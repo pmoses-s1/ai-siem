@@ -171,7 +171,7 @@ export const tools = [
         },
         accountIds: {
           type: 'string',
-          description: 'Account scope for an account-level workflow (e.g. "2046190533732727925"). Provide this OR siteIds.',
+          description: 'Account scope for an account-level workflow (e.g. "1234567890123456789"). Provide this OR siteIds.',
         },
         siteIds: {
           type: 'string',
@@ -217,7 +217,7 @@ export const tools = [
         },
         accountIds: {
           type: 'string',
-          description: 'Account scope for an account-level import (e.g. "2046190533732727925"). Provide this OR siteIds.',
+          description: 'Account scope for an account-level import (e.g. "1234567890123456789"). Provide this OR siteIds.',
         },
         siteIds: {
           type: 'string',

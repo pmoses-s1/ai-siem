@@ -4,26 +4,499 @@
     {
       "id": 0,
       "name": "cef-over-syslog",
-      "prompt": "I have FortiGate-style firewall logs coming in via syslog and need a parser. Sample log file: evals/samples/cef.log\n\nWrite an SDL parser that extracts the syslog priority, timestamp, host, the CEF header fields (vendor, product, version, signature_id, name, severity), and every key=value pair in the extension (src, dst, spt, dpt, proto, act, etc.). Then deploy it to my SDL tenant under a `claude_test_` prefixed name, ingest the sample, and query it back to prove the fields populated correctly. Show me the parser file and the query result.",
-      "files": ["evals/samples/cef.log"],
-      "expected_output": "An augmented-JSON parser deployed via putFile. Sample ingested via HEC ingest with a unique server-host. powerQuery shows 3 rows with non-null src, dst, spt, dpt, proto, act, signature_id, severity fields.",
-      "assertions": []
+      "prompt": "I have FortiGate-style firewall logs coming in via syslog and need a parser. The source is brand new and is not ingesting into the tenant yet, so the sample log file is all I have: evals/samples/cef.log\n\nWrite an SDL parser that extracts the syslog priority, timestamp, host, the CEF header fields (vendor, product, version, signature_id, name, severity), and every key=value pair in the extension (src, dst, spt, dpt, proto, act, etc.). Then deploy it to my SDL tenant, ingest the sample through it, and query it back to prove the fields populated correctly. Save the parser file to `cef_parser.json` and the verification query result to `cef_query_result.json`, as a JSON object with `query`, `columns`, `values` and `row_count`, keeping `columns` and `values` exactly as the API returned them. Show me the parser file and the query result.",
+      "files": [
+        "evals/samples/cef.log"
+      ],
+      "expected_output": "An augmented-JSON parser deployed via putFile to the REAL parser name the source will use in production, with `metadata.version` set on the deploy. The source is not live, so this is the synthetic-ingest fallback: the sample is ingested through that parser via HEC and queried back. No `claude_test_*` throwaway parser is created; the skill prohibits resurrecting that pattern and the validation query is anchored on the real parser name instead. powerQuery shows 3 rows with non-null src, dst, spt, dpt, proto, act, signature_id, severity fields.",
+      "assertions": [
+        {
+          "type": "output_matches",
+          "pattern": "\"dataSource\\.category\"\\s*:\\s*\"security\"",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "cef_parser.json",
+            "pattern": "\"?dataSource\\.category\"?\\s*:\\s*\"security\""
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\"metadata\\.version\"\\s*:\\s*\"\\d+\\.\\d+\\.\\d+",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "cef_parser.json",
+            "pattern": "\"?metadata\\.version\"?\\s*:\\s*\"\\d+\\.\\d+\\.\\d+"
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "/logParsers/(?!claude_test_)[A-Za-z0-9_.-]+",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "cef_query_result.json",
+            "pattern": "parser\\s*=\\s*'(?!claude_test_)[A-Za-z0-9_.-]+'"
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "cef_parser.json",
+          "pattern": "claude_test_",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "cef_query_result.json",
+          "pattern": "claude_test_",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "cef_parser.json",
+          "pattern": "\"?formats\"?\\s*:\\s*\\["
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\\.\\*\\$_=identifier\\$=\\$_=quoteOrSpace\\$",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "cef_parser.json",
+            "pattern": "\\.\\*\\$_=identifier\\$=\\$_=quoteOrSpace\\$"
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "cef_parser.json",
+          "pattern": "(?<!\\.\\*)\\$_=identifier\\$",
+          "count": 0
+        },
+        {
+          "type": "output_matches",
+          "pattern": "repeat\\s*:\\s*true|\\\"repeat\\\"\\s*:\\s*true",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "cef_parser.json",
+            "pattern": "\"?repeat\"?\\s*:\\s*true"
+          }
+        },
+        {
+          "type": "json_parses",
+          "glob": "cef_query_result.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "cef_query_result.json",
+          "path": "row_count",
+          "equals": 3
+        },
+        {
+          "type": "file_matches",
+          "glob": "cef_query_result.json",
+          "pattern": "(?s)\\A(?=.*\"src\")(?=.*\"dst\")(?=.*\"spt\")(?=.*\"dpt\")(?=.*\"proto\")(?=.*\"act\")(?=.*\"signature_id\")(?=.*\"severity_id\")"
+        },
+        {
+          "type": "file_matches",
+          "glob": "cef_query_result.json",
+          "pattern": "\\bnull\\b",
+          "count": 0
+        },
+        {
+          "type": "pq_valid",
+          "glob": "cef_query_result.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\bact\\b[^\\n]{0,40}\\b(?:allow|deny)|\\bdeny\\b[^\\n]{0,40}\\bact\\b",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "cef_query_result.json",
+            "pattern": "(?i)\"deny\""
+          }
+        },
+        {
+          "type": "output_absent",
+          "pattern": "\\|\\s*head\\b"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "\\|\\s*sort\\s+[A-Za-z0-9_.]+\\s+(?:desc|asc)\\b"
+        }
+      ]
     },
     {
       "id": 1,
       "name": "json-with-envelope",
-      "prompt": "I have a stream of authentication events. Each line is `<ISO-timestamp> <host> app:<name> <json-body>` where the JSON body has nested `meta` data. Sample: evals/samples/json_envelope.log\n\nBuild a parser that extracts timestamp + host + app from the prefix and flattens the JSON body using dotted notation (so `meta.ip`, `meta.country`, `meta.mfa` are queryable as fields). Deploy it under a `claude_test_` name, ingest, and confirm via a powerQuery that user, action, result, meta.ip, meta.country, and meta.mfa are all populated.",
-      "files": ["evals/samples/json_envelope.log"],
-      "expected_output": "Parser uses {parse=dottedJson} on the body. powerQuery returns 3 rows with all 6 expected fields populated (3 distinct users, mix of success/failed, country US/RU, mfa true/false).",
-      "assertions": []
+      "prompt": "I have a stream of authentication events. Each line is `<ISO-timestamp> <host> app:<name> <json-body>` where the JSON body has nested `meta` data. This source has not been onboarded to the tenant yet, so the sample is all I have: evals/samples/json_envelope.log\n\nBuild a parser that extracts timestamp + host + app from the prefix and flattens the JSON body using dotted notation (so `meta.ip`, `meta.country`, `meta.mfa` are queryable as fields). Deploy it, ingest the sample through it, and confirm via a powerQuery that user, action, result, meta.ip, meta.country, and meta.mfa are all populated. Save the parser file to `envelope_parser.json` and the confirming query result to `envelope_query_result.json`, as a JSON object with `query`, `columns`, `values` and `row_count`, keeping `columns` and `values` exactly as the API returned them.",
+      "files": [
+        "evals/samples/json_envelope.log"
+      ],
+      "expected_output": "Parser uses {parse=dottedJson} on the body, deployed to the REAL parser name the source will use rather than a `claude_test_*` throwaway, which the skill prohibits. The source is not live, so the sample is ingested through that parser via HEC and the validation query is anchored on the real parser name. powerQuery returns 3 rows with all 6 expected fields populated (3 distinct users, mix of success/failed, country US/RU, mfa true/false).",
+      "assertions": [
+        {
+          "type": "output_matches",
+          "pattern": "\"dataSource\\.category\"\\s*:\\s*\"security\"",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "envelope_parser.json",
+            "pattern": "\"?dataSource\\.category\"?\\s*:\\s*\"security\""
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\"metadata\\.version\"\\s*:\\s*\"\\d+\\.\\d+\\.\\d+",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "envelope_parser.json",
+            "pattern": "\"?metadata\\.version\"?\\s*:\\s*\"\\d+\\.\\d+\\.\\d+"
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "/logParsers/(?!claude_test_)[A-Za-z0-9_.-]+",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "envelope_query_result.json",
+            "pattern": "parser\\s*=\\s*'(?!claude_test_)[A-Za-z0-9_.-]+'"
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "envelope_parser.json",
+          "pattern": "claude_test_",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "envelope_query_result.json",
+          "pattern": "claude_test_",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "envelope_parser.json",
+          "pattern": "\"?formats\"?\\s*:\\s*\\["
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\\$\\{parse=dottedJson\\}\\$",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "envelope_parser.json",
+            "pattern": "\\$\\{parse=dottedJson\\}\\$"
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "envelope_parser.json",
+          "pattern": "\\$(?:body|payload|json|data|event)\\{parse=dottedJson\\}\\$",
+          "count": 0
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\\bmeta\\.(?:ip|country|mfa)\\b",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "envelope_query_result.json",
+            "pattern": "\"meta\\.(?:ip|country|mfa)\""
+          }
+        },
+        {
+          "type": "json_parses",
+          "glob": "envelope_query_result.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "envelope_query_result.json",
+          "path": "row_count",
+          "equals": 3
+        },
+        {
+          "type": "file_matches",
+          "glob": "envelope_query_result.json",
+          "pattern": "(?s)\\A(?=.*\"user\")(?=.*\"action\")(?=.*\"result\")(?=.*\"meta\\.ip\")(?=.*\"meta\\.country\")(?=.*\"meta\\.mfa\")"
+        },
+        {
+          "type": "file_matches",
+          "glob": "envelope_query_result.json",
+          "pattern": "\\bnull\\b",
+          "count": 0
+        },
+        {
+          "type": "pq_valid",
+          "glob": "envelope_query_result.json"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "\\$(?:body|payload|json)\\{parse=dottedJson\\}\\$"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "\\|\\s*head\\b"
+        }
+      ]
     },
     {
       "id": 2,
       "name": "multiline-stack",
-      "prompt": "I'm trying to ingest application logs that have multi-line Java exceptions. Each event starts with a `[YYYY-MM-DD HH:MM:SS]` header and the stack trace follows on indented lines. Sample: evals/samples/multiline_stack.log\n\nBuild a parser that uses lineGroupers to fold the stack trace into the same event as its header, then extracts timestamp, severity (ERROR/WARN/INFO), service, and a short summary. Deploy under `claude_test_` prefix, ingest the sample, and prove via powerQuery that I get 3 logical events back (not 8 lines), with severity and summary populated.",
-      "files": ["evals/samples/multiline_stack.log"],
-      "expected_output": "Parser has a lineGroupers block with start=`^\\[\\d{4}-\\d{2}-\\d{2} ...` plus a continueThrough/haltBefore. powerQuery returns exactly 3 rows. severity_name field has string values ERROR, WARN, ERROR (reserved `severity` is coerced to a 0-6 integer at ingest, so the parser must capture the raw string into `severity_name`). summary field is non-null on each.",
-      "assertions": []
+      "prompt": "I'm trying to ingest application logs that have multi-line Java exceptions. Each event starts with a `[YYYY-MM-DD HH:MM:SS]` header and the stack trace follows on indented lines. Nothing from this source is reaching the tenant yet, so the sample is all I have: evals/samples/multiline_stack.log\n\nBuild a parser that uses lineGroupers to fold the stack trace into the same event as its header, then extracts timestamp, severity (ERROR/WARN/INFO), service, and a short summary. Deploy it, ingest the sample through it, and prove via powerQuery that I get 3 logical events back (not 8 lines), with severity and summary populated. Save the parser file to `multiline_parser.json` and the proving query result to `multiline_query_result.json`, as a JSON object with `query`, `columns`, `values` and `row_count`, keeping `columns` and `values` exactly as the API returned them.",
+      "files": [
+        "evals/samples/multiline_stack.log"
+      ],
+      "expected_output": "Parser has a lineGroupers block with start=`^\\[\\d{4}-\\d{2}-\\d{2} ...` plus a continueThrough/haltBefore, deployed to the REAL parser name rather than a `claude_test_*` throwaway, which the skill prohibits. The source is not live, so the sample is ingested through that parser via HEC and the validation query is anchored on the real parser name. powerQuery returns exactly 3 rows. severity_name field has string values ERROR, WARN, ERROR (reserved `severity` is coerced to a 0-6 integer at ingest, so the parser must capture the raw string into `severity_name`). summary field is non-null on each.",
+      "assertions": [
+        {
+          "type": "output_matches",
+          "pattern": "\"dataSource\\.category\"\\s*:\\s*\"security\"",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "multiline_parser.json",
+            "pattern": "\"?dataSource\\.category\"?\\s*:\\s*\"security\""
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\"metadata\\.version\"\\s*:\\s*\"\\d+\\.\\d+\\.\\d+",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "multiline_parser.json",
+            "pattern": "\"?metadata\\.version\"?\\s*:\\s*\"\\d+\\.\\d+\\.\\d+"
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "/logParsers/(?!claude_test_)[A-Za-z0-9_.-]+",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "multiline_query_result.json",
+            "pattern": "parser\\s*=\\s*'(?!claude_test_)[A-Za-z0-9_.-]+'"
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "multiline_parser.json",
+          "pattern": "claude_test_",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "multiline_query_result.json",
+          "pattern": "claude_test_",
+          "count": 0
+        },
+        {
+          "type": "output_matches",
+          "pattern": "lineGroupers",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "multiline_parser.json",
+            "pattern": "\"?lineGroupers\"?\\s*:\\s*\\["
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "multiline_parser.json",
+          "pattern": "\"?start\"?\\s*:\\s*\"\\^"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\\b(?:continueThrough|continuePast|haltBefore|haltWith)\\b",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "multiline_parser.json",
+            "pattern": "\"?(?:continueThrough|continuePast|haltBefore|haltWith)\"?\\s*:\\s*\""
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\\bseverity_name\\b",
+          "corroborate": {
+            "type": "file_matches",
+            "glob": "multiline_parser.json",
+            "pattern": "\\$severity_name\\b"
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "multiline_parser.json",
+          "pattern": "\\$severity(?:\\$|\\{|=)",
+          "count": 0
+        },
+        {
+          "type": "json_parses",
+          "glob": "multiline_query_result.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\b3\\b[^\\n]{0,40}\\b(?:rows?|events?)\\b",
+          "corroborate": {
+            "type": "file_json_path",
+            "glob": "multiline_query_result.json",
+            "path": "row_count",
+            "equals": 3
+          }
+        },
+        {
+          "type": "file_matches",
+          "glob": "multiline_query_result.json",
+          "pattern": "(?s)\\A(?=.*\"severity_name\")(?=.*\"service\")(?=.*\"summary\")"
+        },
+        {
+          "type": "file_matches",
+          "glob": "multiline_query_result.json",
+          "pattern": "\\bnull\\b",
+          "count": 0
+        },
+        {
+          "type": "pq_valid",
+          "glob": "multiline_query_result.json"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "\\$severity(?:\\$|\\{|=)"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "\\|\\s*head\\b"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "eligibility-triage-probe",
+      "prompt": "Before I ask you to write a parser for a source called `AcmeGateway`, work out whether an SDL parser can run on it at all. Save the PowerQueries you would run to decide, and nothing else, to `queries/eligibility_probe.pq`, one query per line. Then tell me in your reply what each possible outcome means and what I should do in each one.",
+      "expected_output": "The SDL parser sees exactly two attributes on an event, `message` and `parser`, so the probe is a presence/absence count on those two. Every query is anchored on a field filter (`dataSource.name='AcmeGateway'`); a bare `*` as the initial filter returns HTTP 500. Presence is `field = *`; absence is `!(field = *)` WITH the parentheses, because bare `!field` matches every row and reports a healthy source as entirely broken. The reply names all four outcomes: both present, the parser runs, author or edit `/logParsers/<parser>`; `message` only, set a `parser` attribute on the event in Data Pipeline Management; neither present, parse in DPM and author nothing; already parsed in DPM, the promoted fields are expected and there is nothing to author.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "queries/eligibility_probe.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/eligibility_probe.pq",
+          "pattern": "!\\(\\s*parser\\s*=\\s*\\*\\s*\\)"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/eligibility_probe.pq",
+          "pattern": "!\\(\\s*message\\s*=\\s*\\*\\s*\\)"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/eligibility_probe.pq",
+          "pattern": "\\bparser\\s*=\\s*\\*"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/eligibility_probe.pq",
+          "pattern": "!\\s*(?:parser|message)\\b(?!\\s*=)",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/eligibility_probe.pq",
+          "pattern": "\\|\\s*group\\s+\\w+\\s*=\\s*count\\(\\)"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)data pipeline management|\\bDPM\\b"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "/logParsers/"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)(?:pre-?parsed|already parsed)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "message-present-parser-absent",
+      "prompt": "Events from source `AcmeGateway` carry the raw syslog line in `message` on every event, and `parser` is blank on every event. I have edited the parser file three times and nothing changes. Explain why, and write the remediation plan to `plan.md` as an ordered list. Say for each step whether it happens on the SDL side or in the pipeline, and tell me what to check to confirm it worked.",
+      "expected_output": "This is the `message`-present / `parser`-absent case: the SDL parser has no name to select, so nothing runs, and no edit to the parser file can change that. The fix is a `parser` attribute set on the event in Data Pipeline Management, not another parser edit. Order of operations: pick the parser name (reuse the catalog name if the source already has one), deploy or confirm `/logParsers/<name>`, set the `parser` attribute in the DPM pipeline and deploy the pipeline, then wait out parser activation, roughly 3 to 5 minutes, and confirm the new `metadata.version` appears on live events with the expected fields populated. Parsers apply to newly ingested events only and SDL never re-parses history, so the backlog stays unparsed and the fix is judged on new events.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "(?i)data pipeline management|\\bDPM\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "/logParsers/"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "(?i)`?parser`?[^\\n]{0,60}\\battribute\\b|\\battribute\\b[^\\n]{0,60}`?parser`?"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "metadata\\.version"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "(?i)\\b3\\s*(?:to|-)\\s*5\\s*min"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "(?i)newly ingested|new events|never re-?parse|not re-?parse"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)data pipeline management|\\bDPM\\b"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "neither-attribute-steer-to-dpm",
+      "prompt": "Source `AcmeMetrics` has neither `message` nor `parser` on any event, but its other fields are populated and queryable today. Write me an SDL parser for it that pulls out `user` and `action`, and save it so I can deploy it. Put your answer in `answer.md`. If there is a reason not to do this, tell me before you write anything.",
+      "expected_output": "No parser is authored and no parser file is written. With neither attribute present the SDL parser has no name to select and no content to act on, so it cannot run at all; there is no SDL-side lever and the transformation belongs in Data Pipeline Management. An SDL parser cannot reach fields that live outside `message`, so fields an upstream pipeline already promoted to top level are unreachable however the parser is written. The reply also separates this from the already-parsed-in-DPM state, where the absence of both attributes is expected and correct rather than a defect, and it does not invent a parser name to attach to the source.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "(?i)data pipeline management|\\bDPM\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "(?i)cannot (?:be used|run)|no SDL-side lever|not the right tool"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "(?i)(?:pre-?parsed|already parsed)"
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "\\\"?formats\\\"?\\s*:\\s*\\[",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "answer.md",
+          "pattern": "\\\"?lineGroupers\\\"?\\s*:",
+          "count": 0
+        },
+        {
+          "type": "file_absent",
+          "glob": "**/logParsers/**"
+        },
+        {
+          "type": "file_absent",
+          "glob": "*.parser.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)data pipeline management|\\bDPM\\b"
+        }
+      ]
     }
   ]
 }

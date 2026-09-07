@@ -108,7 +108,7 @@ ENVIRONMENT
   S1_CONSOLE_URL              Console URL, e.g. https://usea1-acme.sentinelone.net
   S1_CONSOLE_API_TOKEN        Mgmt Console API token. Required for most tools.
   S1_HEC_INGEST_URL           HEC ingest host. Required for uam_ingest_alert,
-                              uam_post_indicators, uam_post_alert.
+                              uam_post_alert.
   S1_CREDS_FILE               Explicit path to a credentials.json file.
                               Highest priority for credential resolution.
   S1_CLAUDE_MD_PATH           Absolute path to CLAUDE.md for the soc_analyst

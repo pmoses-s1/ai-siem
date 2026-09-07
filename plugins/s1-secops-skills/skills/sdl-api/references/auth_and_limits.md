@@ -2,11 +2,12 @@
 
 ## Key types
 
-The SDL API authenticates with the SentinelOne Console user API token.
+The SDL API authenticates with the SentinelOne Console user API token. Raw log ingest is the one exception and takes a Log Write Key instead.
 
-| Key type                | Where to generate (SDL UI: user menu → API Keys) | Methods unlocked |
-|-------------------------|---------------------------------------------------|------------------|
+| Key type                | Where to generate | Methods unlocked |
+|-------------------------|-------------------|------------------|
 | Console User API token  | S1 Console → Settings → Users → My User → API Token | All query + config methods. |
+| SDL Log Write Key       | Console → Singularity Data Lake → API Keys → Log Write Key. No API mints one. | Raw log ingest over the event collector only. |
 
 Notes:
 
@@ -27,7 +28,9 @@ Required when a console token has access to multiple sites or accounts:
 
 Find the IDs via `GET /web/api/v2.1/accounts` and `GET /web/api/v2.1/sites`, or in the S1 Console → Settings → Accounts / Sites. Group scope does not exist in SDL; a Group selection is silently promoted to the Site above it.
 
-**The header applies to `/sdl/v2/graphql` config-file and dashboard operations too, not only to queries and ingest.** Verified on `<console>` 2026-08-17: `configFiles` returned 113 files at account scope and 4 at a site scope, same token and same query. A dashboard created at site scope does not appear in an account-scoped listing and `configFile` on its `udoId` reports it absent. Treat every "not found" as scope-relative.
+Raw log ingest is out of scope for this header: a Log Write Key is minted for exactly one account or site and writes only there, so the key itself fixes the destination. No `S1-Scope` header is sent for log ingest, and sending one has no effect. To write elsewhere, use a key minted for that scope.
+
+**The header applies to `/sdl/v2/graphql` config-file and dashboard operations too, not only to queries.** Verified on `<console>` 2026-08-17: `configFiles` returned 113 files at account scope and 4 at a site scope, same token and same query. A dashboard created at site scope does not appear in an account-scoped listing and `configFile` on its `udoId` reports it absent. Treat every "not found" as scope-relative.
 
 Because a dropped header changes results rather than erroring, three call sites need the scope threaded through explicitly:
 
@@ -78,9 +81,9 @@ Usage Metering datasource calls (`| datasource "metering"` for `tenants` / `repo
 
 - **12 concurrent requests** max from the same API key.
 
-### Ingestion (moved to HEC)
+### Ingestion (moved to the event collector)
 
-Raw-log/event ingestion is no longer part of this skill; use the HEC ingest path. HEC ingest limits are documented with the HEC tooling.
+Raw-log/event ingestion is not part of the SDL query client; use the event collector (`hec_ingest`) with an SDL Log Write Key in `S1_HEC_TOKEN`. The console API token does not work there: it returns `HTTP 400 {"text":"Missing S1-Scope header","code":5}` where the write key returns `HTTP 200 {"text":"Success","code":0}`. Ingest limits are documented with the ingest tooling.
 
 ## Retry strategy
 

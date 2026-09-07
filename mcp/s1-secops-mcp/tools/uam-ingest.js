@@ -3,28 +3,35 @@
  * via the SentinelOne HEC ingest host (ingest.us1.sentinelone.net).
  *
  * Tools:
- *   uam_ingest_alert      End-to-end: build + POST one FileSystem indicator + one SecurityAlert
- *   uam_post_indicators   Low-level: POST raw OCSF indicators to /v1/indicators
+ *   uam_ingest_alert      End-to-end: build + POST one SecurityAlert carrying its indicator inline
  *   uam_post_alert        Low-level: POST a single raw OCSF SecurityAlert to /v1/alerts
  *
- * These tools require S1_HEC_INGEST_URL in credentials.json in addition to
- * S1_CONSOLE_API_TOKEN (same token, Bearer prefix instead of ApiToken).
+ * uam_post_indicators WAS REMOVED. Indicators can no longer be ingested on their
+ * own: /v1/indicators refuses the console user token and the SDL Log Write Key
+ * alike, so no credential can drive it. They are carried inside the alert, in
+ * finding_info.related_events[], which is also what the console Indicators tab
+ * reads. A tool that can only ever return 403 is worse than no tool, because it
+ * reads as a supported path.
+ *
+ * These tools require S1_HEC_INGEST_URL plus S1_CONSOLE_API_TOKEN. Alert creation
+ * and IOCs remain user-token operations; only raw LOG ingest over the event
+ * collector uses S1_HEC_TOKEN.
  */
 
-import { ingestAlert, ingestAlertInline, postIndicators, postAlert } from '../lib/uam-ingest.js';
+import { ingestAlertInline, postAlert } from '../lib/uam-ingest.js';
 
 export const tools = [
 
   // ─── uam_ingest_alert ─────────────────────────────────────────────────────
   {
     name: 'uam_ingest_alert',
-    description: `Create a synthetic test alert in Unified Alert Management (UAM) via the SentinelOne HEC ingest API. Supports two modes controlled by the "inline" parameter:
+    description: `Create a synthetic test alert in Unified Alert Management (UAM) via the SentinelOne ingest API.
 
-Two-call mode (inline=false, default): POST indicator to /v1/indicators, sleep 3s, POST SecurityAlert to /v1/alerts referencing the indicator uid. The stitcher resolves the full indicator into alert.rawIndicators. Best for testing deep indicator stitching and the Indicators tab in UAM.
+ONE round-trip: a single SecurityAlert POSTed to /v1/alerts with its indicator embedded in finding_info.related_events[]. No sleep, no stitcher race, no ordering contract. That inline copy is what populates alert.indicators, the field the console Indicators tab renders.
 
-Inline mode (inline=true): POST a single SecurityAlert to /v1/alerts with the indicator's file/device/actor fields embedded inside finding_info.related_events[]. No separate indicator POST, no sleep, one round-trip. Best for rapid alert creation or when a single call is preferred.
+There is no longer a two-call alternative. Posting indicators separately to /v1/indicators is refused for every credential type: the console user token and the SDL Log Write Key both fail, so nothing can drive that endpoint. The old flow also wrote alert.rawIndicators, a separate store the UI never read. The inline parameter is still accepted so existing callers do not break, but it is forced to true.
 
-Both modes return indicator_uid and alert_uid. The alert surfaces in UAM within 30-60s. Requires S1_HEC_INGEST_URL in credentials.json.`,
+Returns indicator_uid and alert_uid. The alert surfaces in UAM within 30-60s. Verify with alert(id){indicators{...}}; alertWithRawIndicators stays empty by design. Requires S1_HEC_INGEST_URL and S1_CONSOLE_API_TOKEN.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -55,48 +62,26 @@ Both modes return indicator_uid and alert_uid. The alert surfaces in UAM within 
           type: 'string',
           description: 'SHA-256 hash (64 lowercase hex chars). If omitted, a zeroed placeholder hash is used.',
         },
-        sleep_ms: {
-          type: 'number',
-          description: 'Two-call mode only. Milliseconds to sleep between the indicator POST and the alert POST. Default 3000. Do not go below 2000 on loaded tenants.',
-          default: 3000,
-        },
         inline: {
           type: 'boolean',
-          description: 'When true, embed indicator data (file, device, actor, observables) directly inside the alert\'s finding_info.related_events[] and POST only to /v1/alerts; no separate /v1/indicators call, no sleep. When false (default), use the two-call flow: POST indicator first, sleep, then POST alert.',
-          default: false,
+          description: 'Accepted for backward compatibility and ignored: the value is always true. Indicators ride inside the alert because there is no working way to post them separately. Passing false returns a note saying so rather than silently doing something different.',
+          default: true,
         },
       },
       required: ['scope'],
     },
-    async handler({ scope, title, description, hostname, filename, sha256, sleep_ms = 3000, inline = false }) {
-      const result = inline
-        ? await ingestAlertInline({ scope, title, description, hostname, filename, sha256 })
-        : await ingestAlert({ scope, title, description, hostname, filename, sha256, sleepMs: sleep_ms });
-      return JSON.stringify(result, null, 2);
-    },
-  },
-
-  // ─── uam_post_indicators ──────────────────────────────────────────────────
-  {
-    name: 'uam_post_indicators',
-    description: `POST one or more raw OCSF behavioral indicators to /v1/indicators on the SentinelOne HEC ingest host. Batching is supported; pass multiple indicators in the array and they are sent in a single gzip-compressed request. Each indicator must carry metadata.profiles=["s1/security_indicator"] and a unique metadata.uid (used as the join key when an alert references it). After posting, wait at least 3s before posting a SecurityAlert that references these indicator uids (use uam_post_alert or uam_ingest_alert which enforce the sleep). Requires S1_HEC_INGEST_URL in credentials.json.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        scope: {
-          type: 'string',
-          description: 'accountId or "accountId:siteId". Mandatory.',
-        },
-        indicators: {
-          type: 'array',
-          description: 'Array of OCSF indicator objects. Each must have metadata.uid, metadata.profiles=["s1/security_indicator"], class_uid, and observables[]. file.hashes must be a Fingerprint array [{algorithm_id, algorithm, value}], not a plain dict.',
-          items: { type: 'object', additionalProperties: true },
-        },
-      },
-      required: ['scope', 'indicators'],
-    },
-    async handler({ scope, indicators }) {
-      const result = await postIndicators({ scope, indicators });
+    async handler({ scope, title, description, hostname, filename, sha256, inline = true }) {
+      const result = await ingestAlertInline({ scope, title, description, hostname, filename, sha256 });
+      // Say so rather than quietly substituting a different behaviour. A caller
+      // that asked for the two-call flow is working from a stale assumption and
+      // needs to know the request was not honoured as written.
+      if (inline === false) {
+        result.note =
+          'inline:false was ignored. Indicators cannot be posted separately any more: ' +
+          '/v1/indicators refuses both the console token and the SDL Log Write Key. ' +
+          'The indicator was embedded in the alert instead, which is what the ' +
+          'console Indicators tab reads.';
+      }
       return JSON.stringify(result, null, 2);
     },
   },
@@ -104,7 +89,7 @@ Both modes return indicator_uid and alert_uid. The alert surfaces in UAM within 
   // ─── uam_post_alert ───────────────────────────────────────────────────────
   {
     name: 'uam_post_alert',
-    description: `POST a single raw OCSF SecurityAlert to /v1/alerts on the SentinelOne HEC ingest host. IMPORTANT: one alert per call. The HEC stitcher silently drops all but one alert in a multi-alert POST body (HTTP 202 still returned), so this tool rejects arrays. To send multiple alerts, loop this call. Always post indicator(s) first via uam_post_indicators and sleep at least 3s before calling this; posting an alert before its indicator uids are registered causes a silent drop. Requires S1_HEC_INGEST_URL in credentials.json.`,
+    description: `POST a single raw OCSF SecurityAlert to /v1/alerts on the SentinelOne HEC ingest host. IMPORTANT: one alert per call. The HEC stitcher silently drops all but one alert in a multi-alert POST body (HTTP 202 still returned), so this tool rejects arrays. To send multiple alerts, loop this call. Carry the indicator INLINE in finding_info.related_events[] (uid, title, desc, message, time, severity_id, class_uid, type_uid, category_uid, activity_id, and observables[] with type + typeName). That alone populates alert.indicators, which is what the UAM Indicators tab renders; no /v1/indicators call is needed and none should be made, because that endpoint returns 403 "User token not allowed for this endpoint" for a service-user token while /v1/alerts accepts the same credential. Requires S1_HEC_INGEST_URL in credentials.json.`,
     inputSchema: {
       type: 'object',
       properties: {

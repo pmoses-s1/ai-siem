@@ -23,8 +23,8 @@ every GET + curated safe POSTs.
 | Alert status + verdict mutations | pick alert → status round-trip → verdict round-trip → history check | `tests/test_alert_mutation_lifecycle.py` | Yes (auto-restores to starting state) |
 | Scheduled default-report tasks | CREATE → LIST → UPDATE → DELETE → VERIFY | `tests/test_scheduled_report_lifecycle.py` | Yes |
 | Alert → Indicator pivot | read alert.rawIndicators → pin to TI IOC → verify link → delete | `tests/test_alert_indicator_pivot.py` | Yes (requires single-scope token) |
-| UAM Alert Interface (single) | POST /v1/indicators + /v1/alerts (1 indicator, 1 alert) → poll UAM → verify link → close | `tests/test_uam_alert_interface_single.py` | Semi (closes alert; ingested events are not hard-deletable) |
-| UAM Alert Interface (batch, multi-observable) | batched POST of 3 indicators (file+process+network, OCSF 1001/1007/4001) each with 3+ observables, 1 alert referencing all 3 on a single device -> poll UAM -> assert every metadata.uid + observable surfaces in alert.rawIndicators -> close | `tests/test_uam_alert_interface_batch.py` | Semi (closes alert; ingested events are not hard-deletable). PARTIAL: multi-indicator stitching is flaky on-tenant (2 of 3 indicators typically land inside a 2-minute grace window). See "Known limitations" below. |
+| UAM Alert Interface (single) | one POST /v1/alerts (1 alert, indicator inline) → assert exactly one request was made → poll UAM → verify the indicator surfaced → close | `tests/test_uam_alert_interface_single.py` | Semi (closes alert; ingested events are not hard-deletable). See section 9. |
+| UAM Alert Interface (batch, multi-observable) | one POST /v1/alerts with 3 inline indicators (file+process+network, OCSF 1001/1007/4001) each with 3+ observables, on a single device -> poll UAM -> assert every indicator + observable surfaces -> close | `tests/test_uam_alert_interface_batch.py` | Semi (closes alert; ingested events are not hard-deletable). See section 10. |
 | Unified Exclusions v2.1 | CREATE (EDR path, site scope) → LIST → DELETE → VERIFY | `tests/test_unified_exclusion_lifecycle.py` | Yes (scoped to one site, fictional path) |
 | Hyperautomation workflow lifecycle | IMPORT (minimal manual-trigger workflow) → LIST (recent 20) → DELETE → VERIFY | `tests/test_hyperautomation_import_lifecycle.py` | Yes (REST DELETE, 204; validated 2026-06-13). See gotchas below. |
 | Detection rule ENABLE/DISABLE | CREATE (disabled) → ENABLE → VERIFY_ON (accepts activating) → DISABLE → VERIFY_OFF → DELETE → VERIFY (scheduled + events both exercised) | `tests/test_detection_rule_activate_lifecycle.py` | Yes (demo site; 24h window prevents real firing) |
@@ -271,18 +271,29 @@ a non-real-world hash.
 ## 9. UAM Alert Interface (single) -- `test_uam_alert_interface_single.py`
 
 Proves the **write-side** path into UAM with the minimum viable payload:
-POST one OCSF FileSystem-Activity indicator and one SecurityAlert that
-references it, poll UAM GraphQL until the alert surfaces on the tenant,
-verify the indicator is stitched, then close the alert
+POST one SecurityAlert, poll UAM GraphQL until it surfaces on the tenant,
+verify the indicator, then close the alert
 (status=RESOLVED + analystVerdict=TRUE_POSITIVE_BENIGN) so it leaves the
 SOC queue.
 
+> **Rewritten onto the single-call shape.** The retired two-call flow opened with
+> a `POST /v1/indicators`, and that endpoint refuses the console user token and
+> the SDL Log Write Key alike, so no credential can drive it. The test now makes
+> one `post_alerts([alert], scope=...)` call with the indicator carried inline in
+> `finding_info.related_events[]`, and asserts before sending that the alert body
+> holds the indicator's full context (uid, device, actor, metadata, observables)
+> rather than a bare uid reference. It also asserts that exactly one request went
+> out, to exactly one path, so a regression back to the two-call flow fails the
+> test. That inline copy is what the console Indicators tab renders, so the old
+> sleep and ordering contract are gone with it.
+
 ```text
-1. POST https://ingest.us1.sentinelone.net/v1/indicators   (gzip + Bearer + S1-Scope)
-2. POST https://ingest.us1.sentinelone.net/v1/alerts        (finding_info.related_events[].uid)
-3. Poll UAM GraphQL list_alerts for name~=<run_tag> (up to 90s)
-4. alert_with_raw_indicators -> verify indicator.metadata.uid in rawIndicators
-5. Close alert: status -> RESOLVED + analystVerdict -> TRUE_POSITIVE_BENIGN
+1. POST https://ingest.us1.sentinelone.net/v1/alerts  (gzip + Bearer + S1-Scope)
+   with the indicator inline in finding_info.related_events[]
+2. Poll UAM GraphQL list_alerts for name~=<run_tag> (up to 90s)
+3. Read alert.indicators -> verify the inline indicator surfaced
+   (NOT alertWithRawIndicators: rawIndicators stays [] on this path)
+4. Close alert: status -> RESOLVED + analystVerdict -> TRUE_POSITIVE_BENIGN
 ```
 
 This is a **different API family** from everything else in the skill. All
@@ -295,19 +306,30 @@ family (e.g. `ingest.us1.sentinelone.net`). Find your region endpoint at
   REST scheme is rejected with HTTP 401 `"Unsupported auth type: ApiToken"`.
 - `Content-Encoding: gzip` is mandatory (zstd also accepted). Uncompressed
   bodies are rejected.
-- `S1-Scope: <accountId>` or `<accountId>:<siteId>[:<groupId>]` is mandatory.
+- `S1-Scope: <accountId>` or `<accountId>:<siteId>[:<groupId>]` is mandatory
+  on `/v1/alerts`. (Raw log ingest over the event collector is the opposite:
+  the Log Write Key fixes the destination, no scope header is sent, and
+  sending one has no effect.)
 - Payload is **concatenated JSON** (one or more objects back-to-back,
   optionally newline-separated), then gzip-compressed.
-- Indicator must carry `metadata.profiles = ["s1/security_indicator"]`
-  and a unique `metadata.uid`. The alert references indicators via
-  `finding_info.related_events[].uid == indicator.metadata.uid`.
+- Each `finding_info.related_events[]` entry carries the full indicator
+  content and needs `uid`, `class_uid`, `type_uid`, `category_uid`,
+  `activity_id`, `severity_id`, `time`, `message`, and enriched
+  `observables[]` (each with `type` and `typeName` alongside
+  `type_id`/`name`/`value`).
 
 The skill ships a standalone `scripts/uam_alert_interface.py` helper
 (stdlib only, no `requests`) with `UAMAlertInterfaceClient`,
 `build_file_indicator`, `build_process_indicator`, `build_network_indicator`,
 and `build_alert_referencing` so callers can build other payload shapes
-without rewriting the wire format. Legacy names (`scripts/ingestion_gateway.py`
-and `IngestionGatewayClient`) are still exported as deprecation shims.
+without rewriting the wire format. Send with `post_alerts([alert], scope=...)`,
+one alert per call. The module's `post_indicators()` and
+`post_alert_with_indicators()` were deleted, since both drove the unreachable
+`/v1/indicators` endpoint; tombstone comments in the module record why. There is
+no `scripts/ingestion_gateway.py` and no `IngestionGatewayClient` either. The
+only surviving legacy artefact is
+`tests/test_ingestion_gateway_alert_with_indicator.py`, a stub that prints a
+pointer to the renamed test and exits 2.
 
 **"Semi-reversible":** the ingested alert is not hard-deletable via
 public API, but the cleanup step marks it TRUE_POSITIVE_BENIGN / RESOLVED
@@ -324,23 +346,27 @@ both still honored). Default is `https://ingest.us1.sentinelone.net`.
 ## 10. UAM Alert Interface (batch, multi-observable) -- `test_uam_alert_interface_batch.py`
 
 Comprehensive round-trip that exercises the features the single-indicator
-test does not: **batching**, **multiple observables per indicator**, and
-**multiple indicators linked to one alert** across all three supported
-OCSF classes.
+test does not: **multiple observables per indicator** and **multiple
+indicators on one alert** across all three supported OCSF classes.
+
+> **Rewritten onto the single-call shape, same as test #9.** The retired flow
+> posted to `/v1/indicators` at step 2, which no credential can drive. The test
+> now sends one `POST /v1/alerts` carrying all three indicators inline as three
+> `finding_info.related_events[]` entries, and asserts that exactly one request
+> went out with all three still inline on the wire.
 
 ```text
-1. Build 3 indicators in one batch:
+1. Build 3 indicators:
    - file    (OCSF class 1001) with Hostname, File Name, SHA-256, MD5, User Name, IP Address
    - process (OCSF class 1007) with Hostname, Process Name, Resource UID (pid), User Name, IP Address
    - network (OCSF class 4001) with Hostname, src IP, dst IP, URL, User Name
-2. POST /v1/indicators with all 3 in one gzipped concatenated-JSON body.
-3. POST /v1/alerts with one alert whose finding_info.related_events has 3
-   entries (one per indicator metadata.uid).
-4. Poll UAM GraphQL list_alerts for the run_tag, then wait up to 30s more
-   for server-side stitching to complete.
-5. Read alert.rawIndicators; assert every expected metadata.uid is present
-   and the observable names for each indicator surface correctly.
-6. Close alert: status -> RESOLVED + analystVerdict -> TRUE_POSITIVE_BENIGN
+2. POST /v1/alerts with one alert whose finding_info.related_events has all 3
+   inline, in one gzipped concatenated-JSON body.
+3. Poll UAM GraphQL list_alerts for the run_tag.
+4. Read alert.indicators; assert one record per posted related_events[] entry
+   and report which observable names surfaced on each (observable surfacing is
+   informational, see the shuffle note in the test's _assert_linkage docstring).
+5. Close alert: status -> RESOLVED + analystVerdict -> TRUE_POSITIVE_BENIGN
    (runs even if the link assertion fails, to avoid leaking NEW alerts).
 ```
 
@@ -351,8 +377,7 @@ touches real infrastructure. Hashes are deterministic per `run_tag`.
 Same wire contract, same "semi-reversible" cleanup as test #9; the only
 delta is the payload shape.
 
-**Payload constraints (empirically confirmed on `your-tenant`
-2026-04-22):**
+**Payload constraints (empirically confirmed on a live tenant):**
 
 1. **Alerts that span multiple devices are silently dropped by the
    stitcher.** If `resources[]` contains more than one asset, or the
@@ -369,26 +394,20 @@ delta is the payload shape.
    1.6.0 defines `file.hashes` as an array of Fingerprint objects
    (`[{"algorithm_id": 3, "algorithm": "SHA-256", "value": "<hex>"}, ...]`).
    Posting `{"sha256": "<hex>"}` (dict form) returns 202 at the wire
-   but the stitcher silently drops the file indicator. Bug discovered
-   and fixed in `build_file_indicator()` on 2026-04-22 via diagnostic
-   pass 2 (trial B `sha256-dict-layout` FAILS vs trial C
-   `sha256-array-layout` OK). With the array shape, all 3 indicators
-   (file + process + network) stitch reliably within 2-5s.
+   but the file indicator is silently dropped. `build_file_indicator()`
+   emits the correct array shape (algorithm_id 2=MD5, 3=SHA-256,
+   4=SHA-1, 5=SHA-512).
 3. **Related_events payload requirements** (beyond `uid`): the UAM
    "Alert and Indicator Ingestion" doc calls these "recommended for UI
-   rendering"; in practice they look load-bearing for the stitcher on
-   multi-indicator alerts. Our builder populates them by default.
-4. **GraphQL `alertWithRawIndicators` rendering quirk in batch mode.**
-   When multiple rawIndicators are stitched to one alert, the server
-   returns the flat-key representation (`observables[N].name`/`.value`/
-   `.type_id`) with shuffled VALUES on all entries except the last.
-   Keys are stable; values from other fields (e.g. `account.name`,
-   `metadata.product.name`) bleed into `observables[N].*` slots. Does
-   NOT affect stitching -- `metadata.uid` is correct and the UI reads
-   from a different code path. Programmatic consumers should assert on
-   `metadata.uid` presence in `alert.rawIndicators`, not on flattened
-   `observables[N].name` fields, in batch mode. The batch test treats
-   per-observable assertions as informational for this reason.
+   rendering"; in practice they are load-bearing on multi-indicator
+   alerts. Our builder populates them by default.
+4. **Read `alert.indicators`, not `alertWithRawIndicators`.** The
+   `rawIndicators` store was fed by `POST /v1/indicators` and the UI
+   never read it, so it is `[]` on every alert ingested this way. That
+   is expected, not a failure. The `Indicator` type carries `type`,
+   `uid`, `title`, `description`, `message`, `severity`, plus the
+   `observables` sub-selection; it has no `name` and no `category`, and
+   selecting either fails the whole query at validation.
 
 ---
 
@@ -442,7 +461,7 @@ VERIFY  GET   /web/api/v2.1/cloud-detection/rules?ids=...&siteIds=...&isLegacy=f
 - Custom Detection Rules: CREATE (Disabled) / LIST / UPDATE / DELETE / VERIFY
 - Scheduled default-report tasks: CREATE / LIST / UPDATE / DELETE / VERIFY
 - Alert → IOC pinning pivot: rawIndicator read + pinned IOC CRUD
-- UAM Alert Interface `/v1/indicators` + `/v1/alerts` -- push OCSF indicators + alert into UAM (single + batched 3-indicator / multi-observable across OCSF 1001/1007/4001), verify stitching, close via bulk-ops
+- UAM Alert Interface `POST /v1/alerts` -- push an OCSF alert into UAM with its indicators inline in `finding_info.related_events[]` (single and 3-indicator / multi-observable across OCSF 1001/1007/4001), verify the indicators surfaced, close via bulk-ops. Both test scripts make one POST per alert, with the indicators inline; the retired `/v1/indicators` call is gone from both.
 - PowerQuery Scheduled Detections (`queryType=scheduled`): CREATE / LIST / UPDATE / ENABLE / DISABLE / DELETE / VERIFY on demo site (2026-05-03)
 
 **Confirmed reachable via read-only smoke sweep** (see
@@ -598,8 +617,8 @@ python tests/test_custom_rule_lifecycle.py          # Custom Detection Rules
 python tests/test_alert_mutation_lifecycle.py       # status + verdict round-trip
 python tests/test_scheduled_report_lifecycle.py     # default-report tasks
 python tests/test_alert_indicator_pivot.py          # alert→IOC pivot (single-scope)
-python tests/test_uam_alert_interface_single.py     # POST 1 OCSF indicator + 1 alert, verify in UAM, close
-python tests/test_uam_alert_interface_batch.py      # batched POST of 3 multi-observable indicators + 1 alert referencing all 3, verify in UAM, close
+python tests/test_uam_alert_interface_single.py     # 1 alert + 1 inline indicator, one POST, see section 9
+python tests/test_uam_alert_interface_batch.py      # 1 alert + 3 inline indicators, one POST, see section 10
 python tests/test_unified_exclusion_lifecycle.py    # EDR path exclusion CREATE/LIST/DELETE
 python tests/test_hyperautomation_import_lifecycle.py  # workflow IMPORT/LIST/DELETE
 python tests/test_detection_rule_activate_lifecycle.py  # ENABLE/DISABLE scheduled + events rules

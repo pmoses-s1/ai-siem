@@ -30,6 +30,7 @@ const EXPECTED_TOOLS = [
   'uam_list_alerts',
   'uam_get_alert',
   'uam_add_note',
+  'uam_available_actions',
   'uam_set_status',
   // SDL API: config files (4)
   'sdl_list_files',
@@ -53,7 +54,6 @@ const EXPECTED_TOOLS = [
   'ha_export_workflow',
   // UAM Ingest (3)
   'uam_ingest_alert',
-  'uam_post_indicators',
   'uam_post_alert',
 ];
 

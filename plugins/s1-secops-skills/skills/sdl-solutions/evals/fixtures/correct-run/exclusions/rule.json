@@ -1,0 +1,27 @@
+{
+  "data": {
+    "name": "AKA - Akamai DNS failed lookups (excluding scanners and corporate domains)",
+    "description": "Failed DNS lookups per client, with scanner subnets and corporate domains suppressed at detection time via CSV exclusion lists (akaExclScanners.csv, akaExclDomains.csv). MITRE ATT&CK: Command and Control / T1071.004.",
+    "queryType": "scheduled",
+    "queryLang": "2.0",
+    "severity": "Medium",
+    "status": "Disabled",
+    "expirationMode": "Permanent",
+    "treatAsThreat": "UNDEFINED",
+    "networkQuarantine": false,
+    "coolOffSettings": { "renotifyMinutes": 240 },
+    "entityMappings": [
+      { "columnName": "client_ip" },
+      { "columnName": "query_domain" }
+    ],
+    "scheduledParams": {
+      "query": "dataSource.name = 'Akamai' dns_rcode != 'NOERROR' client_ip = * | lookup excl_asset = reason from akaExclScanners.csv by cidr =:cidr client_ip | filter excl_asset = null | lookup excl_domain = reason from akaExclDomains.csv by value =:anycase query_domain | filter excl_domain = null | group failures = count(), domains = estimate_distinct(query_domain) by client_ip, query_domain | filter failures >= 25 | columns failures, domains, client_ip, query_domain | sort -failures | limit 200",
+      "runIntervalMinutes": 60,
+      "lookbackWindowMinutes": 60,
+      "alertPerRow": false,
+      "disableStreaksLogic": false,
+      "threshold": { "value": 0, "operator": "Greater" }
+    }
+  },
+  "filter": { "accountIds": ["1234567890123456789"] }
+}

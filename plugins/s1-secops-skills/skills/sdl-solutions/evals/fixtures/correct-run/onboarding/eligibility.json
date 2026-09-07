@@ -1,0 +1,13 @@
+{
+  "source": "acme_edge",
+  "message_attribute": "present",
+  "parser_attribute": "absent",
+  "case": "parser absent, message present",
+  "sdl_parser_eligible": false,
+  "reason": "The SDL parser sees only the message and parser attributes. With no parser attribute on the event there is nothing to select a parser with, so no SDL parser can be applied however it is written.",
+  "remediation": "Set a parser attribute on the event in Data Pipeline Management (DPM), then re-run the Step 0 gate and proceed to Step 1.",
+  "probes": {
+    "present": "onboarding/probes/parser_present.pq",
+    "absent": "onboarding/probes/parser_absent.pq"
+  }
+}

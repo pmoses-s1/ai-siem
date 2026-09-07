@@ -1,0 +1,37 @@
+=== soc-investigator: correct-run transcript (fixture) ===
+
+[0] Alert 1770000000000000001 (MV-INSIDERTOOL)
+    Checked in this order, before any telemetry: get_alert_notes, then
+    get_alert_history. MDR left "Alert Type EPP, Classification Benign, Action
+    Resolve" and moved analystVerdict to FALSE_POSITIVE.
+    That verdict takes precedence over the engine's CRITICAL label, which
+    describes the threat class, not an outcome. Verdict: FALSE POSITIVE.
+    Not escalated to the IR bridge, and the host stays in normal operation.
+
+[1] Alert 1770000000000000002 (FIN-WKS-0042)
+    Verdict: SUSPICIOUS - Pending Confirmation. That is the ceiling, not a
+    hedge: a detection is a hypothesis, and none of the three gates is met.
+    External enrichment was declined for this tenant so it was skipped and
+    nothing left SentinelOne; notes and history are empty; one engine firing
+    once is not corroboration. Finance-workstation criticality raises the
+    priority of the next collection step, it does not lift the verdict.
+    No P1 opened.
+
+[2] Internal lateral-movement alert
+    All four indicators are RFC 1918 addresses or an internal account, so
+    enrichment is not applicable: zero lookups performed, zero results
+    reported. Verdict is stated as "consistent with" internal lateral
+    movement over 445/5985, mapped to T1021.002 and T1021.006.
+
+[3] MEDIUM run, alerts ...003 / ...004
+    Three PowerQueries executed, all three in the mandatory query appendix
+    with Purpose, Query, Scope, Result and Evidence. The registry-persistence
+    query on CORP-WKS-0207 returned 0 rows and is in the appendix as such;
+    an empty result is a finding, not an omission.
+
+[4] Alert 1770000000000000005 (CORP-DC-02)
+    Verdict: TRUE POSITIVE. Confidence: confirmed. Three gates met, not one:
+    VirusTotal detection ratio 38/72 malicious, MDR's own malicious verdict,
+    and the same destination 203.0.113.77 in independent firewall telemetry.
+    Endpoint already contained by MDR; outstanding work is a krbtgt double
+    reset and privileged-credential rotation on the domain controller.

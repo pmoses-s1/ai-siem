@@ -169,7 +169,12 @@ _ALERT_DETAIL_FIELDS = _ALERT_CORE_FIELDS + (
     " assets { id name agentUuid category subcategory osType osVersion "
     "primary accessible decommissioned deleted status agentVersion "
     "lastLoggedInUser } "
-    "dataSources { id name }"
+    # `dataSources` is a LEAF type, [String!]!, not an object. Sub-selecting it
+    # fails the WHOLE query with
+    #   Validation error (SubselectionNotAllowed@[alert/dataSources])
+    # which reads as an auth or id problem rather than a schema one. Request it
+    # bare. Same shape as `rawIndicators`, which is also a scalar list here.
+    "dataSources"
 )
 
 
@@ -293,8 +298,63 @@ def get_alert(
     return (r.get("data") or {}).get("alert") or {}
 
 
+# Every field the `Indicator` type actually has. `type`, `uid`, `title`,
+# `description`, `message` and `severity` are scalars; `observables` is the
+# only sub-selection. There is NO `name` and NO `category`: asking for
+# either returns
+#   Validation error (FieldUndefined@[alert/indicators/name])
+# and fails the whole query before it executes. (`indicator.name` and
+# `indicator.category` do exist, but they are SDL PowerQuery fields on EDR
+# behavioural-indicator events, an unrelated schema.)
+_INDICATOR_FIELDS = (
+    "type uid title description message severity "
+    "observables { name value type }"
+)
+
+
+def get_alert_indicators(
+    client: S1Client,
+    alert_id: str,
+    *,
+    fields: str = _INDICATOR_FIELDS,
+) -> List[Dict[str, Any]]:
+    """`alert(id) { indicators { ... } }`: the alert's rendered indicators.
+
+    This is the field the inline ingest path populates and the field the
+    console Indicators tab renders, so it is what a `POST /v1/alerts`
+    round-trip must be validated against. Each `finding_info.related_events[]`
+    entry in the posted alert becomes one entry here.
+
+    Do NOT validate that path with `get_alert_with_raw_indicators`:
+    `rawIndicators` was the store `POST /v1/indicators` fed, no credential
+    can drive that endpoint any more, and on an inline-ingested alert it
+    stays `[]`. Two teams have chased that empty array as if it were a bug.
+
+    See `_INDICATOR_FIELDS` for the exact selection set, and
+    `references/querying-logs.md` for the `related_events[]` -> `Indicator`
+    field mapping.
+    """
+    query = f"""
+    query alertIndicators($id: ID!) {{
+      alert(id: $id) {{ id indicators {{ {fields} }} }}
+    }}
+    """
+    r = _gql(client, query, {"id": alert_id}, allow_retry=True)
+    alert = (r.get("data") or {}).get("alert") or {}
+    return alert.get("indicators") or []
+
+
 def get_alert_with_raw_indicators(client: S1Client, alert_id: str) -> Dict[str, Any]:
-    """`alertWithRawIndicators`: alert plus its raw indicator payload."""
+    """`alertWithRawIndicators`: alert plus its raw indicator payload.
+
+    `rawIndicators` is a SCALAR (a JSON list), not a selectable object:
+    sub-selecting it returns
+      Validation error (SubselectionNotAllowed@[alertWithRawIndicators/rawIndicators])
+    so it must be requested bare, as below.
+
+    It is `[]` on any alert ingested through `POST /v1/alerts` with its
+    indicators inline. Use `get_alert_indicators` to validate that path.
+    """
     query = """
     query ri($id: ID!) {
       alertWithRawIndicators(id: $id) {
@@ -650,6 +710,7 @@ def trigger_actions(
     actions: List[Dict[str, Any]],
     filter_input: Optional[Dict[str, Any]] = None,
     view_type: str = "ALL",
+    diagnose_failures: bool = True,
 ) -> Dict[str, Any]:
     """`alertTriggerActions`: run one or more actions against a filter.
 
@@ -668,6 +729,20 @@ def trigger_actions(
       * ActionsTriggered: `actions[]` with success/skip/failure lists.
       * TriggerActionsScheduled: `bulkActionTriggerId` for long jobs.
       * TriggerActionsError: `errors[]` with `errorMessage`.
+
+    `ActionsTriggered` is NOT a success signal. It means the mutation was
+    accepted; the per-alert outcome is in `success` / `skip` / `failure`. A
+    refused write comes back as `ActionsTriggered` with the alert id under
+    `failure`, so a caller that only watches for an exception reads a refusal
+    as success. Pass the payload through `action_outcome()` instead of
+    eyeballing it.
+
+    `failure[].errorMessage` says WHAT went wrong but is not trustworthy about
+    WHY: an action that is simply not offered for this alert type returns
+    `Missing UAM manage permissions`, which reads as a token-scope problem and
+    is not one. With `diagnose_failures=True` (the default) this function asks
+    `alertAvailableActions` on any failure and attaches the authoritative
+    answer under `resp["diagnosis"]`. See `explain_action_failure`.
     """
     query = """
     mutation trigger(
@@ -685,7 +760,7 @@ def trigger_actions(
             actionId
             success { id __typename }
             skip    { id __typename }
-            failure { id __typename }
+            failure { id errorMessage errorType __typename }
           }
         }
         ... on TriggerActionsError { errors { errorMessage } }
@@ -700,10 +775,145 @@ def trigger_actions(
         "viewType": view_type,
     }
     r = _gql(client, query, variables)
-    return (r.get("data") or {}).get("alertTriggerActions") or {}
+    resp = (r.get("data") or {}).get("alertTriggerActions") or {}
+
+    # Auto-diagnose refusals. The mutation's own errorMessage is not a reliable
+    # statement of cause: a `statusUpdate` that is simply NOT OFFERED for this
+    # alert type comes back as "Missing UAM manage permissions", which reads as
+    # a token-scope problem and is not one. The same token, same scope, same
+    # code path applies that action to a native alert. So on any failure, ask
+    # `alertAvailableActions` (the authoritative capability query) and attach
+    # what it says, rather than letting the caller quote the misleading string.
+    if diagnose_failures and _has_failures(resp):
+        try:
+            resp["diagnosis"] = explain_action_failure(
+                client, scope_input=scope_input, filter_input=filter_input,
+                action_ids=[a.get("id") for a in actions])
+        except Exception as e:                                  # never mask the
+            resp["diagnosis"] = {"error": f"could not query "  # original result
+                                          f"alertAvailableActions: {e}"}
+    return resp
+
+
+def _has_failures(resp: Dict[str, Any]) -> bool:
+    if resp.get("__typename") != "ActionsTriggered":
+        return False
+    return any(a.get("failure") for a in (resp.get("actions") or []))
+
+
+def explain_action_failure(
+    client: S1Client,
+    *,
+    scope_input: Dict[str, Any],
+    filter_input: Optional[Dict[str, Any]] = None,
+    action_ids: List[Optional[str]],
+) -> Dict[str, Any]:
+    """Say why an action was refused, from `alertAvailableActions`.
+
+    Three distinct outcomes, which the mutation's error string conflates:
+
+    * `not_offered`  the action is absent from the alert's available-action
+      list. The alert TYPE does not support it (measured: alerts ingested
+      through the UAM Alert Interface `/v1/alerts` offer only
+      `S1/alert/addNote` and `S1/alert/eventSearch`). No token change helps.
+    * `disabled`     offered but disabled, with the API's own
+      `disabledReason` (measured: `INCIDENT_ACTIONS_ONLY_AVAILABLE_FROM_SITE_VIEW`
+      for the incident actions under ACCOUNT scope, enabled under SITE).
+    * `offered`      the action IS available here, so the refusal is something
+      else, and a genuine permission or state problem is worth escalating.
+
+    Returns `{"<action id>": {"state": ..., "reason": ...}, ...}` plus
+    `available` listing everything the API offered, which is the fastest way to
+    see what this alert can actually do.
+    """
+    r = available_actions(client, scope_input=scope_input,
+                          filter_input=filter_input)
+    offered = {a.get("id"): a for a in (r.get("data") or [])}
+    out: Dict[str, Any] = {"available": sorted(k for k in offered if k)}
+    for aid in action_ids:
+        if aid not in offered:
+            out[aid] = {
+                "state": "not_offered",
+                "reason": ("this alert type does not offer the action; the "
+                           "mutation's own error message may claim a "
+                           "permissions problem and be wrong"),
+            }
+        elif offered[aid].get("isDisabled"):
+            out[aid] = {"state": "disabled",
+                        "reason": offered[aid].get("disabledReason")}
+        else:
+            out[aid] = {"state": "offered",
+                        "reason": ("available here, so the refusal is not "
+                                   "availability; treat the mutation error as "
+                                   "the real cause")}
+    return out
 
 
 # --------------------------------------------------------------------------- convenience wrappers
+
+def action_outcome(resp: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce an `alertTriggerActions` payload to per-action pass/fail.
+
+    Exists because the payload's shape invites a false positive: the mutation
+    returns `ActionsTriggered` whether or not the write applied, and the
+    refusal is buried in `actions[].failure[]`. Callers that treated "no
+    exception" as success reported a resolved alert that was still NEW.
+
+    Returns::
+
+        {"applied": bool,
+         "typename": "ActionsTriggered",
+         "actions": [{"actionId": ..., "ok": [ids], "skipped": [ids],
+                      "failed": [{"id": ..., "errorMessage": ...}]}],
+         "errors": ["..."]}
+
+    `applied` is True only when every action reported at least one success and
+    no failures. A `TriggerActionsScheduled` payload (long bulk job) yields
+    `applied=False` with the trigger id in `errors`, because the write has not
+    happened yet and the caller must poll.
+    """
+    tn = resp.get("__typename")
+    out: Dict[str, Any] = {"applied": False, "typename": tn,
+                           "actions": [], "errors": []}
+
+    if tn == "TriggerActionsError":
+        out["errors"] = [e.get("errorMessage") for e in (resp.get("errors") or [])]
+        return out
+    if tn == "TriggerActionsScheduled":
+        out["errors"] = [f"scheduled as bulk job "
+                         f"{resp.get('bulkActionTriggerId')}, outcome unknown "
+                         f"until polled"]
+        return out
+
+    acts = resp.get("actions") or []
+    for a in acts:
+        ok = [d.get("id") for d in (a.get("success") or [])]
+        skipped = [d.get("id") for d in (a.get("skip") or [])]
+        # errorType is the fallback the MCP's uamSetStatus already uses: some
+        # failures carry a type and no message.
+        failed = [{"id": d.get("id"),
+                   "errorMessage": (d.get("errorMessage") or d.get("errorType")
+                                    or "unknown error"),
+                   "errorType": d.get("errorType")}
+                  for d in (a.get("failure") or [])]
+        out["actions"].append({"actionId": a.get("actionId"), "ok": ok,
+                               "skipped": skipped, "failed": failed})
+        # Append the availability diagnosis when trigger_actions attached one,
+        # so the caller's log line carries the real cause instead of only the
+        # mutation's misleading errorMessage.
+        diag = (resp.get("diagnosis") or {}).get(a.get("actionId")) or {}
+        suffix = ""
+        if diag.get("state") in ("not_offered", "disabled"):
+            suffix = (f" [alertAvailableActions: {diag['state']}"
+                      + (f", {diag['reason']}" if diag.get("reason") else "")
+                      + "]")
+        for f in failed:
+            out["errors"].append(f"{a.get('actionId')}: {f['errorMessage']} "
+                                 f"(id={f['id']}){suffix}")
+    out["applied"] = bool(acts) and all(
+        a["ok"] and not a["failed"] for a in out["actions"])
+    return out
+
 
 def set_alert_status(
     client: S1Client,

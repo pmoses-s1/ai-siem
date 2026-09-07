@@ -1,0 +1,48 @@
+[
+  {
+    "export_id": 1,
+    "parent_action": null,
+    "connected_to": [{ "target": 2, "custom_handle": null }],
+    "action": {
+      "name": "Run Contributors",
+      "type": "http_request",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "integration_id": null,
+      "data": {
+        "action_type": "http_request",
+        "method": "post",
+        "url": "{{S1_CONSOLE_URL}}/sdl/api/powerQuery",
+        "use_authentication_data": true,
+        "headers": [{ "key": "Content-Type", "value": "application/json" }],
+        "body_type": "json",
+        "payload": "{\"query\": \"{{CONTRIBUTOR_PQ}}\", \"startTime\": \"1h\"}",
+        "_connection": "SentinelOne SDL (console JWT, Bearer)"
+      }
+    }
+  },
+  {
+    "export_id": 2,
+    "parent_action": null,
+    "connected_to": [],
+    "action": {
+      "name": "Publish Risk Events",
+      "type": "http_request",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "integration_id": null,
+      "data": {
+        "action_type": "http_request",
+        "method": "post",
+        "url": "{{HEC_INGEST_URL}}/services/collector/event?isParsed=true",
+        "use_authentication_data": true,
+        "headers": [{ "key": "Content-Type", "value": "application/json" }],
+        "body_type": "ndjson",
+        "payload": "{{ndjson}}",
+        "_connection": "separate Bearer connection holding an SDL Log Write Key; the console token is refused here"
+      }
+    }
+  }
+]

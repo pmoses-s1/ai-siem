@@ -1,0 +1,49 @@
+// Syslog-framed CEF (Common Event Format).
+// Deployed as /logParsers/acme_firewall_cef.
+//
+// Sample line the parser targets:
+//   <134>Feb 15 10:25:34 fw-01.example.com CEF:0|Vendor|Firewall|1.0|100|Connection Allowed|5|src=192.168.1.10 dst=10.0.0.5 spt=12345 dpt=80 proto=TCP act=allowed
+//
+// Extraction plan:
+//   <pri>         -> pri
+//   Feb 15 ...    -> ts_raw (reserved `timestamp` is left to the pipeline's receive time)
+//   fw-01...      -> host
+//   CEF:0|...|5|  -> positional CEF header
+//   key=value...  -> repeating key/value catch-all, names become event fields
+
+{
+  timezone: "UTC",
+
+  attributes: {
+    // Required pipeline defaults.
+    "metadata.version":    "1.0.0",
+    "dataSource.category": "security",
+    "dataSource.name":     "Acme Firewall",
+    "dataSource.vendor":   "Acme",
+    dataset: "cef"
+  },
+
+  patterns: {
+    // Classic-syslog stamp: "Feb 15 10:25:34".
+    syslogTs: "[A-Z][a-z]{2}\\s+\\d{1,2}\\s+\\d{2}:\\d{2}:\\d{2}",
+    // The CEF `name` field is free-form text WITH SPACES, so the default
+    // `quotable` capture stops early and the format silently fails to match.
+    notPipe:  "[^|]*"
+  },
+
+  formats: [
+    // Frame format. No `halt: true`, the key/value extractor below must still
+    // run on the same line or src/dst/spt/dpt come back null.
+    {
+      id: "cef-header",
+      format: "<$pri=digits$>$ts_raw=syslogTs$ $host$ CEF:$cef_version=notPipe$\\|$cef_vendor=notPipe$\\|$cef_product=notPipe$\\|$dev_version=notPipe$\\|$signature_id=notPipe$\\|$name=notPipe$\\|$severity_id=notPipe$\\|$extension$"
+    },
+    // Extension key/value catch-all. The leading `.*` is load-bearing: without
+    // it the format anchors at position 0 and captures nothing.
+    {
+      id: "kv-catchall",
+      format: ".*$_=identifier$=$_=quoteOrSpace$",
+      repeat: true
+    }
+  ]
+}

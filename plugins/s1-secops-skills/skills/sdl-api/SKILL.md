@@ -11,7 +11,7 @@ description: >-
 > REST `listFiles` / `getFile` **cannot see** udoId-addressed `/dashboards/` files, so `getFile`
 > returns `404` on a dashboard the console is displaying and the listing under-reports (measured on
 > one tenant: REST 8, GraphQL 17, console 48 files). **If a listing disagrees with what the UI
-> shows, the listing is wrong until proven otherwise** — change read path before concluding the
+> shows, the listing is wrong until proven otherwise**, change read path before concluding the
 > object is missing or the token lacks scope. Use the GraphQL `configFiles` / `configFile` surface.
 > A name-addressed `addConfigFile` to `/dashboards/` **creates a duplicate** instead of updating;
 > address dashboards by `udoId` with `expectedVersion`. `content` is HJSON, not JSON. `S1-Scope`
@@ -207,9 +207,17 @@ Prefer numeric OCSF for filters; the string `severity_` is case-mixed
 (`Critical` and `CRITICAL` co-exist) and will produce split columns in
 `transpose`.
 
-## HEC ingestion, simulating events for detection testing
+## Raw log ingestion, simulating events for detection testing
 
-Raw-log ingestion runs through HEC (the `hec_ingest` tool; `POST {S1_HEC_INGEST_URL}/services/collector`, client documented with `mgmt-console-api`). When injecting events into the data lake to validate a detection, these behaviours are confirmed live (2026-07):
+Raw-log ingestion runs through the event collector (the `hec_ingest` tool; `POST {S1_HEC_INGEST_URL}/services/collector/raw` and `/event`).
+
+**Auth is an SDL Log Write Key, carried in `S1_HEC_TOKEN`.** The Management Console API token, service user or personal, is refused: on identical requests the write key returns `HTTP 200 {"text":"Success","code":0}` and the console token returns `HTTP 400 {"text":"Missing S1-Scope header","code":5}`. Mint the key at Console > Singularity Data Lake > API Keys > Log Write Key; no API creates one. It is optional in config because only log ingest needs it.
+
+**The ingest scope cannot be overridden.** A Log Write Key is minted for exactly one account or site and writes only there, so the key itself fixes the destination. No `S1-Scope` header is sent for log ingest, and sending one has no effect. To write elsewhere, use a key minted for that scope.
+
+UAM alert ingest (`POST /v1/alerts` on the same host) and IOCs are a different path and still use the console API token (`S1_CONSOLE_API_TOKEN`); that client is documented with `mgmt-console-api`.
+
+When injecting events into the data lake to validate a detection, these behaviours are confirmed live:
 
 - **Use flat dotted keys, not nested JSON.** With `/event?isParsed=true`, nested OCSF such as `{"event":{"category":"firewall"}}` dropped `event.category` (read back null, since `event.*` is a reserved namespace). The flat key `{"event.category":"firewall"}` landed correctly. Flat dotted keys reliably populate arbitrary OCSF fields (`src.ip.address`, `dst.ip.address`, `threat.category`, ...) and even EDR-style S1QL column names (`EventType`, `TgtProcName`, `LogonResult`) as literal, queryable attributes. `dataSource.name` / `.category` / `.vendor` set via flat keys stick (e.g. `dataSource.category` stays `security`).
 - **HEC data can drive all three custom-rule types.** On an AI-SIEM tenant, `events` and `correlation` STAR rules evaluate HEC-ingested data (both fired from HEC events in testing), not only EDR-agent telemetry, and `scheduled` PowerQuery rules run over the same data lake. So HEC ingest of flat-key events is a working way to end-to-end test any of the three custom detection rule types. See the Detection-as-Code playbook in `sdl-solutions`.
@@ -322,8 +330,9 @@ No Desktop Commander workaround is necessary when you use these tools.
 
 This is not a credential issue. Do not widen time windows or change query logic to debug this.
 
-## HEC ingest (learnings)
+## Raw log ingest (learnings)
 
+- **Auth is the SDL Log Write Key (`S1_HEC_TOKEN`), and the key fixes the scope.** The console API token is refused, `HTTP 400 {"text":"Missing S1-Scope header","code":5}` against the write key's `HTTP 200 {"text":"Success","code":0}`. A key writes only to the account or site it was minted for; no header overrides that. See "Raw log ingestion" above.
 - **Three mandatory attributes for the XDR / OCSF view:** `dataSource.name`, `dataSource.vendor`, `dataSource.category`. Set all three as query params on `POST {HEC}/services/collector/event?isParsed=true&dataSource.name=...&dataSource.vendor=...&dataSource.category=...`. With only `dataSource.name` the events land under **All Data** but are invisible under the **XDR** view (XDR-scoped dashboards and rules show nothing, while all-data API queries still return them).
 - **`dataSource.category` MUST be hard-coded to `security`. Do not derive it from the event's OCSF semantics.** This attribute is the ingestion routing category that places the event in the XDR / OCSF security pipeline where detections, STAR/scheduled rules, and Singularity Threat Intelligence IOC matching run. It is NOT the OCSF event category. Setting it from the log type (e.g. `network` for a firewall, `identity` for auth logs, `cloud` for CloudTrail) lands the event under All Data only: it stays fully queryable via all-data PowerQuery, but the security pipeline never evaluates it, so XDR detections and Threat Intelligence matches silently never fire. Always send `dataSource.category=security`. The OCSF `category_uid` / `category_name` inside the event body (e.g. `4` / `Network Activity` for a firewall) is a separate field and stays true to the event; only the ingest-time `dataSource.category` query param is pinned to `security`. Confirmed failure mode (2026-07): a Palo Alto OCSF event ingested with `dataSource.category=network` was queryable under All Data but produced no Threat Intelligence match; the fix is `dataSource.category=security`.
 - **Singularity Threat Intelligence IOC matching, ingest requirements:** for a HEC-ingested OCSF event to be eligible for a TI match it must (1) carry `metadata.version` with any non-empty value, this is the only "is OCSF" check the TI engine performs, it does NOT validate the full OCSF schema; (2) be ingested with `dataSource.category=security` (see above); and (3) carry the IOC value in the OCSF field the engine matches on, for an IP IOC that is `src_endpoint.ip` (also checks `dst_endpoint.ip`). A match generates a NEW event with `dataSource.name='Threat Intelligence'` and `metadata.labels[0]='s1_threat_intelligence_indicator'`; the event Name is the source data-source name. Matching is asynchronous, allow several minutes before querying for the match log.

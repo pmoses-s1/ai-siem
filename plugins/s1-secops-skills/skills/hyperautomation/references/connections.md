@@ -43,7 +43,7 @@ All three SentinelOne connections share one body shape; they differ only in `nam
 
 | Connection | `name` | Auth prefix | Used for |
 |---|---|---|---|
-| **SentinelOne SDL** | `SentinelOne SDL connection` | `Bearer` | SDL LRQ / PowerQuery / HEC ingest (`/sdl/…`, `/services/collector`) |
+| **SentinelOne SDL** | `SentinelOne SDL connection` | `Bearer` | SDL LRQ / PowerQuery (`/sdl/…`), UAM alert ingest (`/v1/alerts`) |
 | **SentinelOne GraphQL** | `SentinelOne GraphQL connection` | `Bearer` | Unified Alerts GraphQL, agentic-investigation, alert write-backs (`/web/api/v2.1/unifiedalerts/graphql`) |
 | **SentinelOne** (mgmt) | `SentinelOne connection` | `ApiToken` | Mgmt REST (`/web/api/v2.1/…`): sign as `ApiToken`, NOT `Bearer` |
 
@@ -51,6 +51,24 @@ All three SentinelOne connections share one body shape; they differ only in `nam
   `way_to_pass_prefix` accordingly. Binding the wrong one is the classic `HTTP 500
   "Header must start with Bearer"` (mgmt token on an SDL endpoint) failure.
 - `api_key` is the console API token for all three.
+
+### HEC event-collector ingest needs a fourth, separate connection
+
+`POST {HEC_INGEST_URL}/services/collector/event` and `/raw` do **not** take the console API token.
+They take an **SDL Log Write Key**. A Hyperautomation connection passes its stored credential
+through verbatim as `Authorization: Bearer <value>`, so the binding is a `Bearer` connection created
+with the same body shape above but `api_key` set to the Log Write Key rather than the console token.
+Measured live: the write key returns `HTTP 200 {"text":"Success","code":0}`; the console token
+returns `HTTP 400 {"text":"Missing S1-Scope header","code":5}`, and adding an `S1-Scope` header does
+not fix it. Send **no** `S1-Scope` header on collector actions: the key is minted for one account or
+site and that fixes where events land, so the header is not honoured.
+
+Mint the key at Console → Singularity Data Lake → API Keys → Log Write Key; no API creates one. Keep
+this connection distinct from "SentinelOne SDL", a flow that both queries SDL and ingests to the
+collector needs both bound, one per action.
+
+`POST {HEC_INGEST_URL}/v1/alerts` (UAM alert ingest) is the opposite case on the same host: console
+API token **and** the `S1-Scope` header. Do not conflate the two.
 - **Find the `integration_id`** without hard-coding it: `GET /connections/scope?<scope>` on a scope
   that already has the connection and read each connection's `integration_id`, or list the tenant's
   integrations. Reuse that id when creating the same connection type in another scope.

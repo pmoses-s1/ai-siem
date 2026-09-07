@@ -1,0 +1,280 @@
+{
+  "skill_name": "sdl-dashboard",
+  "evals": [
+    {
+      "id": 0,
+      "name": "markdown-header-and-number-kpi",
+      "prompt": "Build the top row of a SOC dashboard tab: a markdown header tile explaining what the tab covers, first in the panel list, then one number panel counting high-severity alerts in the window. Save the whole dashboard to `dash.json`. The last three markdown tiles we shipped rendered as blank boxes headed \"Untitled\", so make sure this one actually draws, and tell me what was wrong with the old ones.",
+      "expected_output": "The markdown tile is `graphStyle: \"markdown\"` with its body under `markdown:`, not `content:`. A `content:` body is the blank-tile defect: the API accepts the JSON, the panel mounts, and nothing draws, with no error anywhere. The missing `title` key is the second half, that is what renders the header as \"Untitled\" on S-26.1, so the tile carries a short plain-text title and keeps the prose in `markdown`. Every panel has an explicit `layout` with x, y, w and h; omitting them can hang the renderer. The number panel terminates with `| limit 1` after the `| group` that reduces to one row, otherwise the engine keeps scanning after the answer is computed.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "dash.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "dash.json",
+          "path": "graphs.0.graphStyle",
+          "equals": "markdown"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "dash.json",
+          "path": "graphs.0.markdown",
+          "exists": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "dash.json",
+          "path": "graphs.0.title",
+          "exists": true
+        },
+        {
+          "type": "file_matches",
+          "glob": "dash.json",
+          "pattern": "\"content\"\\s*:",
+          "count": 0
+        },
+        {
+          "type": "file_json_path",
+          "glob": "dash.json",
+          "path": "graphs.0.layout.h",
+          "exists": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "dash.json",
+          "path": "graphs.1.graphStyle",
+          "equals": "number"
+        },
+        {
+          "type": "file_matches",
+          "glob": "dash.json",
+          "pattern": "\\|\\s*limit\\s+1\\s*\""
+        },
+        {
+          "type": "pq_valid",
+          "glob": "dash.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\bmarkdown\\b"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)untitled"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "transpose-terminal-timeline",
+      "prompt": "I need one stacked-bar timeline panel for a dashboard whose `duration` is `7 days`: alert volume over time, one series per severity. My last attempt came back \"Couldn't load content\" with something about transpose, and the one before that drew so many points the tab crawled. Save just that one panel object to `panel.json` and name both mistakes.",
+      "expected_output": "`transpose` is the terminal command in a PowerQuery pipeline: nothing may follow it, so any `| limit` / `| sort` / `| filter` goes before it, not after. That is the \"transpose can only be used as the last command in a query\" error verbatim. The bucket is sized to the window: over 7 days `timebucket(\"1h\")` is the minimum, because a 10m bucket over 7d is 1,008 points per series. `graphStyle` is `stacked_bar` with `xAxis: \"time\"`, not `area`: an `area` panel driven by a `query` field spins indefinitely with no error. The panel carries explicit x/y/w/h.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "panel.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "panel.json",
+          "path": "graphStyle",
+          "equals": "stacked_bar"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "panel.json",
+          "path": "xAxis",
+          "equals": "time"
+        },
+        {
+          "type": "file_matches",
+          "glob": "panel.json",
+          "pattern": "\\|\\s*transpose\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "panel.json",
+          "pattern": "\\|\\s*transpose\\b[^\"]*\\|",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "panel.json",
+          "pattern": "timebucket\\("
+        },
+        {
+          "type": "file_matches",
+          "glob": "panel.json",
+          "pattern": "timebucket\\(\\s*['\\\\\\\"]\\d+\\s*[ms]['\\\\\\\"]",
+          "count": 0
+        },
+        {
+          "type": "file_json_path",
+          "glob": "panel.json",
+          "path": "layout.h",
+          "exists": true
+        },
+        {
+          "type": "pq_valid",
+          "glob": "panel.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)transpose"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)timebucket|\\bbucket\\b"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "hyphenated-arithmetic",
+      "prompt": "This dashboard panel refuses to load with `Identifier \"total-min\" is ambiguous`. Fix it, save the corrected query and nothing else to `queries/spread.pq`, and explain why the parser reads it that way so I stop writing it.\n\n    dataSource.name='alert' | group total=count(), min=min(severity_id), max=max(severity_id) by site.id | let spread = max-min, share = total-min/total | sort -spread | limit 25",
+      "expected_output": "The PowerQuery parser reads `max-min` and `total-min` as single hyphenated identifiers, not as subtraction, which is why the error names an identifier rather than a field. The fix is spaces around every arithmetic `-`: `max - min` and `(total - min) / total`. Nothing else in the pipeline changes; `| sort -spread` is the descending-sort prefix and is correct as written, and the `| limit 25` stays. The explanation names the identifier-versus-subtraction cause rather than blaming the field names.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "queries/spread.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/spread.pq",
+          "pattern": "[A-Za-z_][A-Za-z0-9_.]*\\s+-\\s+[A-Za-z_][A-Za-z0-9_.]*"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/spread.pq",
+          "pattern": "[A-Za-z_][A-Za-z0-9_.]*-[A-Za-z_][A-Za-z0-9_.]*",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/spread.pq",
+          "pattern": "\\|\\s*sort\\s+-spread\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/spread.pq",
+          "pattern": "\\|\\s*limit\\s+25\\b"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)identifier"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)subtract"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "site-scoped-panels-and-safety-check",
+      "prompt": "This dashboard is deployed at site `9876543210987654321`. Give it two panels: a number panel counting distinct endpoints seen in the window, and a table panel of the top 25 event types. Save it to `site_dash.json`, then run the skill's own pre-deploy safety check against the file and tell me the exact command and its exit status.",
+      "expected_output": "Both query panels carry `site.id='9876543210987654321'`. `site.name` is not used as the scoping predicate: measured on one site, 510 of 60,410 events carry the site id with a null `site.name`, including 10 `alert` and 111 `asset` records, so a `site.name` filter drops exactly what a SOC dashboard leans on, silently. The number panel terminates with `| limit 1`; the table panel carries an explicit `| limit 25`. Every panel has explicit x/y/w/h. The reply shows `python3 scripts/panel_safety_check.py site_dash.json --site-id 9876543210987654321` exiting 0 with no flags.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "site_dash.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "site_dash.json",
+          "pattern": "site\\.id\\s*==?\\s*['\\\\\\\"]9876543210987654321['\\\\\\\"]",
+          "count": 2
+        },
+        {
+          "type": "file_matches",
+          "glob": "site_dash.json",
+          "pattern": "site\\.name\\s*(?:==?|\\bin\\b|\\bcontains\\b)",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "site_dash.json",
+          "pattern": "\\|\\s*limit\\s+1\\s*\""
+        },
+        {
+          "type": "file_matches",
+          "glob": "site_dash.json",
+          "pattern": "\\|\\s*limit\\s+25\\b"
+        },
+        {
+          "type": "pq_valid",
+          "glob": "site_dash.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "panel_safety_check\\.py"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "--site-id\\s+9876543210987654321"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "area-spinner-triage",
+      "prompt": "One panel on my deployed dashboard shows a spinner forever and never errors. The dashboard `duration` is `7 days`. Here it is:\n\n    {\"title\": \"Traffic over time\", \"graphStyle\": \"area\", \"query\": \"dataSource.name='FortiGate' | group c=count() by timestamp=timebucket('10m'), act=unmapped.action | transpose act on timestamp | limit 20\", \"layout\": {\"x\": 0, \"y\": 0, \"w\": 60, \"h\": 16}}\n\nFind every defect, not just the one causing the spinner, and save the corrected panel to `fixed_panel.json`.",
+      "expected_output": "Three defects. `graphStyle: \"area\"` is built around the `plots: [...]` pattern, so a query-driven multi-series chart ending in `transpose` does not render under it and the panel spins with no error; switch to `stacked_bar` (or `line`) with `xAxis: \"time\"` and keep the query body. `| limit 20` sits AFTER `| transpose`, which the renderer rejects with \"transpose can only be used as the last command in a query\"; the limit moves before the transpose or goes away. `timebucket('10m')` over a 7-day window is 1,008 points per series; 7d takes `1h` at minimum. The layout block is already correct and stays.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "fixed_panel.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "fixed_panel.json",
+          "path": "graphStyle",
+          "matches": "^(?:stacked_bar|line)$"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "fixed_panel.json",
+          "path": "xAxis",
+          "equals": "time"
+        },
+        {
+          "type": "file_matches",
+          "glob": "fixed_panel.json",
+          "pattern": "\"area\"",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "fixed_panel.json",
+          "pattern": "\\|\\s*transpose\\b[^\"]*\\|",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "fixed_panel.json",
+          "pattern": "timebucket\\(\\s*['\\\\\\\"]\\d+\\s*[ms]['\\\\\\\"]",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "fixed_panel.json",
+          "pattern": "timebucket\\("
+        },
+        {
+          "type": "pq_valid",
+          "glob": "fixed_panel.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)transpose"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\barea\\b"
+        }
+      ]
+    }
+  ]
+}

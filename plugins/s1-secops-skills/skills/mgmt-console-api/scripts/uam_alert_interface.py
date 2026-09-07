@@ -1,11 +1,10 @@
 """
 UAM (Unified Alert Management) Alert Interface helper.
 
-Write-side API that pushes OCSF-formatted indicators and alerts INTO
-UAM so they surface in the console as real alerts with attached
-indicators. Separate host + wire contract from the Mgmt Console REST
-and the UAM GraphQL query layer (both of which are READ/mutate on
-pre-existing state).
+Write-side API that pushes OCSF-formatted alerts INTO UAM so they
+surface in the console as real alerts with attached indicators. Separate
+host + wire contract from the Mgmt Console REST and the UAM GraphQL
+query layer (both of which are READ/mutate on pre-existing state).
 
 Host (region-specific, e.g. US1 shown; see https://community.sentinelone.com/s/article/000004961 for your region):
     https://ingest.us1.sentinelone.net
@@ -15,53 +14,52 @@ Wire contract
 -------------
   * Content-Encoding: gzip (mandatory; zstd also accepted by the server)
   * Authorization:    Bearer <JWT>          -- NOT "ApiToken ..."
-  * S1-Scope:         <accountId>[:<siteId>[:<groupId>]]
+  * S1-Scope:         <accountId>[:<siteId>[:<groupId>]]  (mandatory on
+                      /v1/alerts)
   * Body:             concatenated JSON (one or more objects back-to-back,
                       optionally newline-separated), then gzip-compressed.
-                      Used for both the single-object and the batch case.
   * Response:         202 Accepted with {"details":"Success","status":202}
                       on success; 4xx JSON {"details":"...", "status":<n>}
                       on rejection.
 
 Auth token
 ----------
-The interface accepts the same service-user JWT used for the Mgmt
-Console API (loaded from credentials.json via S1Client.api_token,
-canonical key `S1_CONSOLE_API_TOKEN`).
-`ApiToken <token>` is rejected with HTTP 401
+/v1/alerts takes the same service-user JWT used for the Mgmt Console API
+(loaded from credentials.json via S1Client.api_token, canonical key
+`S1_CONSOLE_API_TOKEN`). `ApiToken <token>` is rejected with HTTP 401
 `{"details":"Unsupported auth type: ApiToken"}`, so callers MUST switch
 to the `Bearer` scheme when talking to this endpoint family.
 
-Indicator <-> alert linkage
----------------------------
-Indicators live at /v1/indicators and must carry:
-    metadata.profiles = ["s1/security_indicator"]
-    metadata.uid      = "<uuid>"   # the linkage key
-Alerts live at /v1/alerts and reference indicators by UID:
-    finding_info.related_events[].uid = "<indicator metadata.uid>"
-The server stitches them once both sides land. A single alert MAY
-reference many indicators by including multiple related_events entries
-(one per indicator uid).
+This is NOT the credential used by the raw log event collector
+(`/services/collector/raw` and `/services/collector/event`), which
+requires an SDL Log Write Key (`S1_HEC_TOKEN`) and sends no `S1-Scope`
+header. The two surfaces share a host and nothing else; do not swap the
+credentials between them.
+
+Indicators ride inline in the alert
+-----------------------------------
+Indicators are NOT posted separately. `POST /v1/indicators` refuses both
+the console API token and the SDL Log Write Key, so no credential can
+reach it. Every indicator travels inside the alert body at
+`finding_info.related_events[]` in a single `POST /v1/alerts`, carrying
+its full OCSF context (device, actor, file / process / endpoints,
+metadata, observables). That inline copy is what populates
+`alert.indicators`, which the console Indicators tab renders.
+
+An alert MAY carry many indicators: one `related_events[]` entry per
+indicator, each keyed by its own `metadata.uid`.
+`build_alert_referencing` builds these entries for you.
+
+Because ingest is a single POST, there is no ordering to get right and
+no window in which one half of the pair is visible without the other.
 
 Batching
 --------
-POST /v1/indicators accepts N indicators per call (concatenated JSON,
-gzip-compressed); batching indicators is the idiomatic path.
-
-POST /v1/alerts is DIFFERENT. Empirically (usea1-acme 2026-04-22) the
-gateway accepts multi-alert bodies and returns HTTP 202, but the
-stitcher silently drops all but one of the alerts. Call /v1/alerts with
-ONE alert per invocation; loop if you have many. `post_alerts` emits a
-RuntimeWarning when called with more than one alert to flag the issue.
-
-Race condition between /v1/indicators and /v1/alerts
-----------------------------------------------------
-The stitcher resolves `finding_info.related_events[].uid` against the
-set of indicators already registered for the scope. Posting the alert
-immediately after the indicators can fire those lookups before the
-indicator's `metadata.uid` lands, which silently drops the alert
-(HTTP 202 still returned). A ~3s sleep between the two POSTs avoids
-this; the `post_alert_with_indicators` helper builds the sleep in.
+POST /v1/alerts accepts concatenated JSON for N alerts and the gateway
+returns HTTP 202, but the ingest pipeline has been observed to silently
+drop all but one of the alerts (usea1-acme 2026-04-22). Call /v1/alerts
+with ONE alert per invocation; loop if you have many. `post_alerts`
+emits a RuntimeWarning when called with more than one alert.
 
 Usage
 -----
@@ -75,16 +73,12 @@ Usage
     mgmt = S1Client()
     uam  = UAMAlertInterfaceClient(bearer_token=mgmt.api_token)
 
-    # Preferred safe path: one helper call per alert. It POSTs the
-    # indicators, sleeps 3s, then POSTs the single alert.
-    uam.post_alert_with_indicators(alert, [ind1, ind2, ind3],
-                                   scope=f"{acct}:{site}")
+    alert = build_alert_referencing(
+        alert_uid=alert_uid, indicators=[ind1, ind2, ind3],
+        now_ms=now_ms, title="...", description="...")
 
-    # Low-level path (only if you need custom ordering). Remember: ONE
-    # alert per /v1/alerts call, and sleep between the two POSTs.
-    uam.post_indicators([ind1, ind2, ind3], scope=f"{acct}:{site}")
-    time.sleep(3)
-    uam.post_alerts([alert_linking_all_three], scope=f"{acct}:{site}")
+    # ONE POST carries the alert and all three indicators inline.
+    uam.post_alerts([alert], scope=f"{acct}:{site}")
 """
 from __future__ import annotations
 
@@ -92,7 +86,6 @@ import gzip
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.request
 import warnings
@@ -252,9 +245,23 @@ class UAMAlertInterfaceError(RuntimeError):
         super().__init__(f"HTTP {status} on {method} {url}: {body}")
 
 
+# REMOVED: UAMAlertInterfaceClient.post_indicators().
+# It POSTed to /v1/indicators, which refuses both the console API token
+# and the SDL Log Write Key, so no credential can drive it. There is no
+# separate indicator ingest. Put the indicator inline in the alert at
+# finding_info.related_events[] (build_alert_referencing does this) and
+# send it with post_alerts().
+
+# REMOVED: UAMAlertInterfaceClient.post_alert_with_indicators().
+# It sequenced post_indicators() -> sleep -> post_alerts() to dodge a
+# race between two POSTs. With indicators inline there is only one POST,
+# so the sequencing, the sleep, and the helper all have nothing left to
+# do. Call post_alerts([alert], scope=...) directly.
+
+
 class UAMAlertInterfaceClient:
-    """Thin wrapper over POST /v1/indicators and POST /v1/alerts against
-    the UAM Alert Interface (Unified Alert Management ingestion surface).
+    """Thin wrapper over POST /v1/alerts against the UAM Alert Interface
+    (Unified Alert Management ingestion surface).
 
     Intentionally stdlib-only (urllib + gzip) so it has no coupling to
     the `requests`-based S1Client and can run in a fresh Python without
@@ -345,113 +352,35 @@ class UAMAlertInterfaceClient:
             raise UAMAlertInterfaceError(e.code, body, method="POST", url=url)
 
     # ------------------------------------------------------------------ API
-    def post_indicators(self, indicators: List[Dict[str, Any]], *, scope: str,
-                        trace_id: Optional[str] = None) -> Dict[str, Any]:
-        """POST /v1/indicators. One or many per call.
-
-        Each indicator MUST carry:
-            metadata.profiles >= ["s1/security_indicator"]
-            metadata.uid       = <uuid>          # linkage key
-            class_uid / type_uid / activity_id   # OCSF required
-            observables[]                        # surfaces in UAM Indicators tab
-        """
-        return self._post("/v1/indicators", indicators, scope=scope,
-                          trace_id=trace_id)
-
     def post_alerts(self, alerts: List[Dict[str, Any]], *, scope: str,
                     trace_id: Optional[str] = None) -> Dict[str, Any]:
         """POST /v1/alerts. Call with ONE alert per invocation.
 
-        Each alert MUST reference its indicator(s) via:
-            finding_info.related_events[].uid == indicator.metadata.uid
-
-        A single alert may reference MANY indicators by including multiple
-        related_events entries, one per uid. The server stitches them into
-        the alert's Indicators tab once both sides land on the tenant.
+        This is the only ingest call. Each alert carries its indicators
+        inline at `finding_info.related_events[]`, one entry per
+        indicator, each holding that indicator's full OCSF context
+        (`metadata.uid`, device, actor, file / process / endpoints,
+        observables). Build the alert with `build_alert_referencing` and
+        the inline entries are produced for you. The inline copy is what
+        populates `alert.indicators` for the console Indicators tab.
 
         Multi-alert bodies: the wire format accepts concatenated JSON for
         N alerts in one POST, and the gateway returns HTTP 202, but the
-        stitcher has been observed to silently drop all but one of the
-        alerts (usea1-acme 2026-04-22). Loop callers over this method
-        one alert at a time, or use `post_alert_with_indicators`, which
-        enforces the safe pattern. A RuntimeWarning is emitted when
-        `alerts` has more than one entry so callers notice the hazard.
+        ingest pipeline has been observed to silently drop all but one of
+        the alerts (usea1-acme 2026-04-22). Loop callers over this method
+        one alert at a time. A RuntimeWarning is emitted when `alerts`
+        has more than one entry so callers notice the hazard.
         """
         if len(alerts) > 1:
             warnings.warn(
                 "UAM Alert Interface: posting multiple alerts in a single "
                 "POST /v1/alerts call silently drops all but one alert "
                 "(HTTP 202 still returned). Loop callers one alert at a "
-                "time, or use UAMAlertInterfaceClient."
-                "post_alert_with_indicators().",
+                "time.",
                 RuntimeWarning,
                 stacklevel=2,
             )
         return self._post("/v1/alerts", alerts, scope=scope, trace_id=trace_id)
-
-    def post_alert_with_indicators(
-        self,
-        alert: Dict[str, Any],
-        indicators: List[Dict[str, Any]],
-        *,
-        scope: str,
-        sleep_between_s: float = 3.0,
-        trace_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Safely ingest one alert with its supporting indicators.
-
-        This wraps the canonical two-step sequence proven to get alerts
-        to surface in UAM without silent stitcher drops:
-
-          1. POST all `indicators` to /v1/indicators (batched is fine;
-             N indicators per call is the idiomatic path).
-          2. Sleep `sleep_between_s` (default 3s) so each indicator's
-             `metadata.uid` is registered before the alert's
-             `finding_info.related_events[].uid` lookups fire.
-          3. POST `alert` BY ITSELF to /v1/alerts.
-
-        Two empirical failure modes this helper prevents (confirmed on
-        `usea1-acme` 2026-04-22):
-
-          * Back-to-back POSTs with no sleep: the stitcher can resolve
-            `related_events[].uid` before the indicator lands on the
-            scope, silently dropping the alert. HTTP 202 is still
-            returned. `test_uam_alert_interface_batch.py` uses a 3s
-            sleep for this reason; reducing it below ~2s has been
-            observed to regress on loaded tenants.
-          * Multiple alerts in one POST: the wire format accepts it,
-            HTTP 202 is returned, but the stitcher silently drops all
-            but one. Callers with many alerts should loop this helper
-            once per alert.
-
-        Arguments
-        ---------
-        alert: a single alert dict (as built by `build_alert_referencing`).
-        indicators: list of indicator dicts referenced by the alert via
-            `finding_info.related_events[].uid`. May include indicators
-            not referenced by this alert -- extras are harmless.
-        scope: `S1-Scope` header value. Mandatory.
-        sleep_between_s: seconds to sleep between the indicator POST and
-            the alert POST. Defaults to 3.0; do not reduce unless you
-            are certain the target tenant is unloaded.
-        trace_id: optional `S1-Trace-Id` header value. Applied to both
-            POSTs so they can be correlated in server-side traces.
-
-        Returns
-        -------
-        `{"indicators": <indicator_resp>, "alert": <alert_resp>}`.
-        """
-        if not indicators:
-            raise ValueError(
-                "post_alert_with_indicators requires >=1 indicator; "
-                "the alert's related_events[].uid must match an indicator "
-                "metadata.uid for the stitcher to surface it.")
-        indicator_resp = self.post_indicators(
-            indicators, scope=scope, trace_id=trace_id)
-        time.sleep(sleep_between_s)
-        alert_resp = self.post_alerts(
-            [alert], scope=scope, trace_id=trace_id)
-        return {"indicators": indicator_resp, "alert": alert_resp}
 
 
 # -------------------------------------------------------------------- helpers
@@ -721,13 +650,19 @@ def build_alert_referencing(
     detection_product: str = "smoke-product",
     detection_vendor: str = "smoke-vendor",
 ) -> Dict[str, Any]:
-    """S1 SecurityAlert that references one OR many indicators.
+    """S1 SecurityAlert carrying one OR many indicators inline.
 
     `indicators` is a list of indicator dicts (as returned by any
     build_*_indicator helper above). The returned alert embeds one
-    `finding_info.related_events[]` entry per indicator, linked by
-    metadata.uid. Observables are carried through on each related_events
-    entry so the UAM Indicators tab surfaces the right data.
+    `finding_info.related_events[]` entry per indicator, and each entry
+    holds that indicator's FULL context, not just a uid reference:
+    `metadata` (including the `metadata.uid` key), `device`, `actor`,
+    the class-specific object (`file` / `process` / `src_endpoint` +
+    `dst_endpoint` + `url`), the OCSF class/type/category/activity ids,
+    and the enriched `observables[]`. This inline copy is the only way
+    indicator data reaches the tenant, since /v1/indicators is not
+    reachable with any credential, and it is what populates
+    `alert.indicators` for the console Indicators tab.
 
     `detection_product` / `detection_vendor` populate `metadata.product`
     on the posted alert. These drive how UAM classifies the synthetic
@@ -740,28 +675,26 @@ def build_alert_referencing(
     the tenant). See references/ASSET_LINKAGE.md for the full matrix.
     """
     if not indicators:
-        raise ValueError("alert must reference at least one indicator")
+        raise ValueError("alert must carry at least one inline indicator")
 
-    # Per SentinelOne UAM "Alert and Indicator Ingestion" docs: carry the
-    # class/type/category/activity fields and enriched observables forward
-    # onto each related_events entry so the UI can render the Indicators
-    # tab without a secondary lookup against SDL. Observables get extra
-    # `type` + `typeName` fields for rendering.
+    # Copy each indicator WHOLE onto its related_events entry. There is
+    # no second POST that could supply the rest of the record later, so a
+    # reference-only entry (uid + a few scalars) would land an indicator
+    # with no context attached. Carrying the full body forward keeps
+    # device / actor / file / process / endpoint context, and the OCSF
+    # class/type/category/activity ids, on the alert itself, which is
+    # what the Indicators tab renders from. Observables additionally get
+    # `type` + `typeName` for rendering.
     related_events = []
     for ind in indicators:
-        enriched_obs = [_enrich_observable_for_alert(o)
-                        for o in ind.get("observables", [])]
-        related_events.append({
-            "message": ind.get("message", ""),
-            "time": ind["time"],
-            "uid": ind["metadata"]["uid"],
-            "severity_id": ind.get("severity_id", severity_id),
-            "observables": enriched_obs,
-            "class_uid": ind.get("class_uid"),
-            "type_uid": ind.get("type_uid"),
-            "category_uid": ind.get("category_uid"),
-            "activity_id": ind.get("activity_id"),
-        })
+        entry = dict(ind)
+        entry["uid"] = ind["metadata"]["uid"]
+        entry["message"] = ind.get("message", "")
+        entry["time"] = ind["time"]
+        entry["severity_id"] = ind.get("severity_id", severity_id)
+        entry["observables"] = [_enrich_observable_for_alert(o)
+                                for o in ind.get("observables", [])]
+        related_events.append(entry)
 
     # resources[] on an S1 Security Alert is the affected ASSET. Per the
     # UAM "Alert and Indicator Ingestion" worked example, a single alert

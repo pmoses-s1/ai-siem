@@ -91,7 +91,8 @@ Filter syntax: `fieldId=value` (stringEqual), `fieldId=v1,v2` (stringIn), `field
 |---|---|---|---|
 | `alerts` | Primary alert list | `list_alerts`, `paginate_alerts` | Connection (edges/pageInfo/totalCount). `filters:` is `[FilterInput!]` (AND-joined). |
 | `alert(id)` | Fetch one alert | `get_alert` | Returns `Alert` with all enrichment fields. |
-| `alertWithRawIndicators` | Alert + raw indicator JSON | `get_alert_with_raw_indicators` | Nested shape: `{ alert { ... }, rawIndicators }`. |
+| `alert(id) { indicators }` | The alert's rendered indicators | `get_alert_indicators` | This is what the inline `POST /v1/alerts` path populates and what the console Indicators tab renders, so it is what an ingest round-trip must be validated against. `Indicator` has `type`, `uid`, `title`, `description`, `message`, `severity`, plus the `observables { name value type }` sub-selection. No `name`, no `category`: either fails the whole query with `FieldUndefined`. |
+| `alertWithRawIndicators` | Alert + raw indicator JSON | `get_alert_with_raw_indicators` | Nested shape: `{ alert { ... }, rawIndicators }`. `rawIndicators` is a SCALAR (a JSON list): sub-selecting it returns `SubselectionNotAllowed`, so request it bare. It was fed by `POST /v1/indicators`, which no credential can drive any more, so on ingested alerts it is `[]`. Read `alert.indicators` via `get_alert_indicators` instead. |
 | `alertColumnMetadata` | Discover fields/enums | `column_metadata` | Tells you what you can filter, sort, group on; enum values per field. |
 | `alertAvailableActions` | What can be triggered | `available_actions` | Needs `scope` + `filter` (OrFilter). No filter ⇒ returns 0. |
 | `alertNotes` | List notes on an alert | `alert_notes` | `AlertNotesListResponse` wraps a bare `data` list. |
@@ -114,7 +115,79 @@ Filter syntax: `fieldId=value` (stringEqual), `fieldId=v1,v2` (stringIn), `field
 | `addAlertNote` | Create note | `add_alert_note` | Returns the full note list for the alert (find the new one by matching text or by diffing ids before/after). |
 | `updateAlertNote` | Edit note | `update_alert_note` | Fails for ~30-90s after creation with `mgmt_note_id not set`. Wrapper retries automatically. |
 | `deleteAlertNote` | Remove note | `delete_alert_note` | Same eventual-consistency behaviour; wrapper retries. |
-| `alertTriggerActions` | Bulk actions against a filter | `trigger_actions` + convenience wrappers (`set_alert_status`, `set_analyst_verdict`, `assign_alerts`) | Filter is `OrFilterSelectionInput` (use `or_filter(...)`). Result is a union of `ActionsTriggered | TriggerActionsError | TriggerActionsScheduled`. |
+| `alertTriggerActions` | Bulk actions against a filter | `trigger_actions` + convenience wrappers (`set_alert_status`, `set_analyst_verdict`, `assign_alerts`) | Filter is `OrFilterSelectionInput` (use `or_filter(...)`). Result is a union of `ActionsTriggered | TriggerActionsError | TriggerActionsScheduled`. `ActionsTriggered` is not success, see below. |
+
+### `ActionsTriggered` is an acknowledgement, not a result
+
+A refused write returns `__typename: "ActionsTriggered"` with the alert id under
+`actions[].failure[]`, identical in shape to an accepted one apart from which
+sub-list the id lands in. Code that checks for an exception, or checks only the
+`__typename`, reads a refusal as a success. Three callers in this repo did, and
+one printed `CLEANUP ok` for an alert that never left `NEW`.
+
+The reason is in `actions[].failure[].errorMessage`, so `trigger_actions`
+selects `failure { id errorMessage __typename }`. Reduce the payload with
+`action_outcome(resp)`:
+
+```python
+oc = ua.action_outcome(ua.set_alert_status(
+    client, scope_input=sc, alert_ids=[alert_id], status="RESOLVED"))
+if not oc["applied"]:
+    raise RuntimeError("; ".join(oc["errors"]))
+```
+
+`applied` is True only when every action reported a success and no failures. A
+`TriggerActionsScheduled` payload gives `applied=False`, because a bulk job has
+not written anything yet and the caller has to poll.
+
+### `errorMessage` is not a diagnosis: never infer a permission limit from it
+
+**`Missing UAM manage permissions` does not mean the token lacks a scope.** It
+is also what you get when the action is not offered for that alert's type. All
+of the following were measured on one tenant with one token, minutes apart:
+
+| Alert | `statusUpdate` per `alertAvailableActions` | Mutation result |
+|---|---|---|
+| ingested via `/v1/alerts` (UAM Alert Interface) | absent from the list entirely | `failure`, `Missing UAM manage permissions` |
+| native STAR / third-party / correlation alert | `enabled` | `success`, `updatedAt` moves |
+
+Same token, same `ACCOUNT` scope, same `stringEqual` filter, same code path. A
+reversible round-trip on a supported alert proved the token: `NEW` to
+`IN_PROGRESS` to `NEW`, `applied=True` both ways. So the ingested-alert
+refusal is a **capability** fact about the alert type, and a token change fixes
+nothing.
+
+The rule this repo now enforces: **when an action is refused, ask
+`alertAvailableActions` before stating a cause.** It returns `isDisabled` and
+`disabledReason` per action and is the only authoritative answer.
+`trigger_actions(diagnose_failures=True)` (the default) does this
+automatically on any failure and attaches the result under
+`resp["diagnosis"]`, which `action_outcome` folds into its error strings:
+
+```python
+oc = ua.action_outcome(ua.set_alert_status(
+    c, scope_input=sc, alert_ids=[aid], status="RESOLVED"))
+# oc["errors"] ->
+#   ['S1/alert/statusUpdate: Missing UAM manage permissions (id=...) '
+#    '[alertAvailableActions: not_offered, this alert type does not offer '
+#    'the action; ...]']
+```
+
+`explain_action_failure()` returns the three states directly: `not_offered`
+(alert type does not support it), `disabled` (offered, with the API's reason),
+`offered` (available here, so the mutation error is the real cause and worth
+escalating).
+
+Two further measured facts from the same probe:
+
+- Action availability is **scope-sensitive**. The incident actions
+  (`S1/incident/create`, `addToExisting`, `remove`) are disabled under
+  `ACCOUNT` scope with `disabledReason:
+  INCIDENT_ACTIONS_ONLY_AVAILABLE_FROM_SITE_VIEW`, and enabled under `SITE`.
+  Re-check availability per scope, not once per tenant.
+- The enum is not a hidden cause. The schema rejects a bad value outright
+  (`CLOSED` raises `Invalid input for enum 'Status'`), so a value that gets as
+  far as `failure` was accepted. Live enum: `NEW | IN_PROGRESS | RESOLVED`.
 
 ---
 
@@ -257,6 +330,7 @@ csv = uam.export_alerts_csv(c, filters=[
 | `Alert Note with ID ... does not have mgmt_note_id set, unable to [edit\|delete], try again later!` | Note freshly created; management-side id hasn't propagated. | Retry after 30-120s. The wrapper does this automatically. |
 | No actions returned from `alertAvailableActions` | Called it with no filter or with a filter that matches nothing. | Pass a non-empty `or_filter(...)` (e.g. by alert id). |
 | **0 results with no error** when filtering `status="OPEN"` | `"OPEN"` is not a valid UAM status enum value. Returns 0 results silently; no GraphQL error is raised. Confirmed on live tenant. | Use `"NEW"` instead. Valid status values are `NEW`, `IN_PROGRESS`, `RESOLVED` only. |
+| `Validation error (FieldUndefined@[alert/indicators/name]) : Field 'name' in type 'Indicator' is undefined` | Selecting `name` or `category` on `Indicator`. Neither field exists, and either one fails the whole query before it executes. | Select from `type`, `uid`, `title`, `description`, `message`, `severity`, plus the `observables` sub-selection. `indicator.name` / `indicator.category` are SDL PowerQuery fields on EDR behavioural-indicator events, an unrelated schema. |
 | **0 results with no error** when filtering `status="FALSE_POSITIVE"` | `"FALSE_POSITIVE"` is an `analystVerdict` value, not a `status` value. Silently returns 0 results. | To filter by analyst verdict, use `fieldId="analystVerdict"` with `stringEqual {value: "FALSE_POSITIVE_USER_ERROR"}` (or whichever verdict value). Status and analystVerdict are separate fields. |
 
 ---
@@ -281,12 +355,12 @@ Findings from a live events-vs-scheduled reproduction (2026-06).
 
 - Scheduled (PowerQuery) custom rules populate the Target Asset ONLY when `data.entityMappings: [{"columnName": "<output col>"}]` is configured (UI: "Entity column mapping") referencing column(s) the query projects. Without it the alert is "Unknown Device" (`agentUuid: null`). Projecting the column is necessary but not sufficient; the `entityMappings` declaration is what binds it. Confirmed live.
 - Events-type rules bind the entity from the matched event. The entity TYPE is driven by the event's OCSF `class_uid`: authentication/identity classes (e.g. `3002`) bind an **Identity** (user); endpoint classes (e.g. `1008`) bind a **Device**, reconciled via `device.agent.uuid` against agent inventory. The class is the switch, not the presence of agent fields (a real `device.agent.uuid` on an auth-class event still bound an Identity).
-- **UAM ingest** (`uam_ingest_alert`) builds the asset from the event's `device` object with `agentUuid: null` and `storylineId: null`, so neither agent reconciliation nor a storyline is needed. UAM ingest is distinct from HEC ingest though it shares the ingest host URL.
+- **UAM ingest** (`uam_ingest_alert`) builds the asset from the event's `device` object with `agentUuid: null` and `storylineId: null`, so neither agent reconciliation nor a storyline is needed. UAM alert ingest is distinct from raw log ingest though it shares the ingest host URL.
 - `storylineId` is NOT required for asset binding (a device-bound alert had `storylineId: null`).
 
-## Ingestion paths (HEC vs UAM)
+## Ingestion paths (event collector vs UAM)
 
-Two distinct ingest APIs share the ingest host URL but are not connected:
+Two distinct ingest APIs share the ingest host URL. They are not connected, and they take different credentials.
 
-- **HEC ingest** (HTTP Event Collector): raw logs/events + a named `parser`; feeds Event Search, PowerQuery, and detection rules. This is the log-ingestion path (replaces the removed SDL `uploadLogs`). For pre-structured / OCSF JSON ingested with `?isParsed=true` (no parser), each event MUST include `dataSource.name`, `dataSource.vendor`, `dataSource.category` (set to `security` for custom OCSF sources), `event.type` (as a FLAT dotted key, a nested `event:{...}` object is dropped since `event` is HEC-reserved), and `site_id`. OCSF omits these, and without them events land with a null source (no attribution; `dataSource.name`-based filters/detections miss).
-- **UAM ingest** (`uam_post_indicators` / `uam_ingest_alert`, `/v1/*`): creates UAM alerts/indicators directly and builds the alert asset from the event `device` object. Site routing via `scope = accountId:siteId`.
+- **Raw log ingest** (event collector, `/services/collector/raw` and `/event`): raw logs/events + a named `parser`; feeds Event Search, PowerQuery, and detection rules. This is the log-ingestion path (replaces the removed SDL `uploadLogs`). It authenticates with an **SDL Log Write Key** (`S1_HEC_TOKEN`), not the console API token: on identical requests the write key returns `HTTP 200 {"text":"Success","code":0}` and the console token returns `HTTP 400 {"text":"Missing S1-Scope header","code":5}`. The key is minted for one account or site at Console > Singularity Data Lake > API Keys > Log Write Key, and that fixes the ingest destination; no `S1-Scope` header is sent and sending one has no effect. For pre-structured / OCSF JSON ingested with `?isParsed=true` (no parser), each event MUST include `dataSource.name`, `dataSource.vendor`, `dataSource.category` (set to `security` for custom OCSF sources), `event.type` (as a FLAT dotted key, a nested `event:{...}` object is dropped since `event` is reserved), and `site_id`. OCSF omits these, and without them events land with a null source (no attribution; `dataSource.name`-based filters/detections miss).
+- **UAM alert ingest** (`uam_ingest_alert` / `uam_post_alert`, `POST /v1/alerts`): creates UAM alerts directly and builds the alert asset from the event `device` object. Still uses the console API token (`S1_CONSOLE_API_TOKEN`), with site routing via `scope = accountId:siteId`. Indicators have no separate endpoint: `/v1/indicators` refuses the console user token and the Log Write Key alike, so carry them inline in `finding_info.related_events[]`, which is also what feeds `alert.indicators` and the console Indicators tab.

@@ -272,7 +272,7 @@ test('v1Query retries on 5xx (schema discovery is the workload that hits the QPS
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// S1-Scope plumbing and the dashboardsV2 lifecycle (added 1.4.0)
+// S1-Scope plumbing and the dashboardsV2 lifecycle (added 1.3.4)
 //
 // Live evidence these encode (<console>, 2026-08-17): the console sends
 // `s1-scope` on all 23 SDL GraphQL operations, and `getConfigurationFiles`
@@ -303,8 +303,8 @@ function stubFetchH(responses) {
   return calls;
 }
 
-const ACCOUNT = '2046190533732727925';
-const SITE = '2547662415802335157';
+const ACCOUNT = '1234567890123456789';
+const SITE = '9876543210987654321';
 const SITE_SCOPE = `${ACCOUNT}:${SITE}`;
 
 // ─── scope header ───

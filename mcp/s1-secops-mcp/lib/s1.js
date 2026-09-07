@@ -559,6 +559,44 @@ export async function uamAddNote(alertId, noteText) {
 }
 
 /**
+ * What actions does the API say this caller may trigger on this alert?
+ *
+ * The authoritative capability answer, and the thing to consult before
+ * explaining any refused action. Returns the raw list, each entry carrying
+ * `{id, title, type, isDisabled, disabledReason}`.
+ *
+ * `alertAvailableActions` needs a non-null `scope`, unlike alertTriggerActions,
+ * so account ids are resolved first. Availability is scope-sensitive (measured:
+ * the S1/incident/* actions report
+ * INCIDENT_ACTIONS_ONLY_AVAILABLE_FROM_SITE_VIEW under ACCOUNT scope and are
+ * enabled under SITE), so pass `scope` explicitly when you care about a
+ * site-scoped action.
+ */
+export async function uamAvailableActions(alertId, scope) {
+  let resolved = scope;
+  if (!resolved) {
+    const accts = await apiGet('/web/api/v2.1/accounts', { limit: 100 });
+    const ids = (accts?.data || []).map((a) => a.id).filter(Boolean);
+    if (!ids.length) throw new Error('no accounts visible to this token');
+    resolved = { scopeIds: ids, scopeType: 'ACCOUNT' };
+  }
+  const query = `
+    query AvailableActions($scope: ScopeSelectorInput!, $filter: OrFilterSelectionInput) {
+      alertAvailableActions(scope: $scope, filter: $filter) {
+        data { id title type isDisabled disabledReason }
+        errors { errorMessage }
+      }
+    }
+  `;
+  const variables = {
+    scope: resolved,
+    filter: { or: [{ and: [{ fieldId: 'id', stringEqual: { value: alertId } }] }] },
+  };
+  const data = await uamGraphql(query, variables, undefined, { readOnly: true });
+  return data?.alertAvailableActions?.data || [];
+}
+
+/**
  * Update the status of a UAM alert via alertTriggerActions.
  * Valid status values (confirmed via Status enum introspection): NEW | IN_PROGRESS | RESOLVED
  * Note: FALSE_POSITIVE is not a status; it is an analystVerdict value.
@@ -605,7 +643,35 @@ export async function uamSetStatus(alertId, status) {
   }
   if (action.failure?.length) {
     const f = action.failure[0];
-    throw new Error(`uamSetStatus failed for alert ${alertId}: ${f.errorMessage || f.errorType || 'unknown error'}`);
+    // errorMessage says WHAT failed, not WHY. `Missing UAM manage permissions`
+    // is also what a not-offered action returns: alerts ingested via the UAM
+    // Alert Interface (/v1/alerts) expose only addNote and eventSearch, while
+    // the same token sets status on a native alert successfully (measured).
+    // So ask alertAvailableActions before reporting a cause, and never let the
+    // caller conclude "the token lacks permission" from the string alone.
+    let hint = '';
+    try {
+      const avail = await uamAvailableActions(alertId);
+      const ids = avail.map((a) => a.id);
+      if (!ids.includes('S1/alert/statusUpdate')) {
+        hint = ' | alertAvailableActions: statusUpdate is NOT OFFERED for this '
+             + `alert type (available: ${ids.join(', ') || 'none'}). This is a `
+             + 'capability limit of the alert, not a token scope; a new token '
+             + 'will not help.';
+      } else {
+        const a = avail.find((x) => x.id === 'S1/alert/statusUpdate');
+        hint = a?.isDisabled
+          ? ` | alertAvailableActions: offered but DISABLED (${a.disabledReason || 'no reason given'}).`
+          : ' | alertAvailableActions: statusUpdate IS available here, so the '
+            + 'refusal is not availability. Escalate as a genuine permission '
+            + 'or state problem.';
+      }
+    } catch (e) {
+      hint = ` | could not query alertAvailableActions to diagnose: ${e.message}`;
+    }
+    throw new Error(
+      `uamSetStatus failed for alert ${alertId}: ${f.errorMessage || f.errorType || 'unknown error'}${hint}`
+    );
   }
   if (!(action.success?.length) && action.skip?.length) {
     throw new Error(

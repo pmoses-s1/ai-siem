@@ -1,0 +1,98 @@
+Deployed /logParsers/acme_firewall_cef via putFile at metadata.version 1.0.0, ingested the 3
+sample lines through HEC, and queried them back.
+
+The source is not ingesting yet, so this is the synthetic-ingest fallback rather than the default
+edit-the-live-parser path. Even on that fallback the parser goes to the real name the source will
+use in production, `acme_firewall_cef`, not a throwaway test parser: a throwaway has to be
+promoted or cleaned up later, and the validation then proves a parser nothing will ever use.
+
+Parser (acme_firewall_cef):
+  attributes: {
+    "dataSource.category": "security",
+    "dataSource.name": "Acme Firewall",
+    "dataSource.vendor": "Acme",
+    "metadata.version": "1.0.0"
+  }
+  formats: [
+    { id: "syslog-cef-header",
+      format: "<$_pri{regex=[0-9]+}$>$time=tsPattern$ $host$ CEF:$cef_version{regex=[0-9]+}$|$vendor$|$product$|$dev_version$|$signature_id$|$name{regex=[^|]+}$|$severity_id{regex=[0-9]+}$|" },
+    { id: "kv-catchall", format: ".*$_=identifier$=$_=quoteOrSpace$", repeat: true }
+  ]
+
+Parser file saved to cef_parser.json.
+
+Validation query and result (saved to cef_query_result.json):
+  parser='acme_firewall_cef' | columns src, dst, spt, dpt, proto, act, signature_id, severity_id | sort -ts_raw | limit 10
+  3 rows: src/dst/spt/dpt/proto all populated; act = allowed, deny, allowed; signature_id 100/200/100.
+
+---
+
+Deployed /logParsers/acme_auth_envelope at metadata.version 1.0.0 for the envelope source,
+again the real parser name and not a throwaway; the source is not live so the sample was
+ingested through it via HEC.
+
+Parser (acme_auth_envelope):
+  attributes: {
+    "dataSource.category": "security",
+    "dataSource.name": "Acme Auth",
+    "dataSource.vendor": "Acme",
+    "metadata.version": "1.0.0"
+  }
+  formats: [
+    { format: "$time$ $host$ app:$app$ ${parse=dottedJson}$", discardAttributes: ["message"] }
+  ]
+
+Capturing into an EMPTY field name keeps user/action/result at top level and flattens the nested
+object to meta.ip, meta.country and meta.mfa. A named capture would have prefixed every field.
+
+Parser file saved to envelope_parser.json; query result saved to envelope_query_result.json.
+
+  parser='acme_auth_envelope' | columns user, action, result, meta.ip, meta.country, meta.mfa | sort -ts_raw | limit 10
+  3 rows, all 6 fields populated: carol/alice/bob, success/failed/success, US/RU/US, true/false/true.
+
+---
+
+Deployed /logParsers/acme_service_app at metadata.version 1.0.0 for the multi-line Java
+source, real parser name again, sample ingested through it via HEC.
+
+Parser (acme_service_app):
+  attributes: {
+    "dataSource.category": "security",
+    "dataSource.name": "Acme Service",
+    "dataSource.vendor": "Acme",
+    "metadata.version": "1.0.0"
+  }
+  lineGroupers: [ { start: "^\\[\\d{4}-\\d{2}-\\d{2} ", continueThrough: "^(?:\\s|Caused by:|\\.\\.\\.)" } ]
+  formats: [
+    { format: "[$time$] $severity_name{regex=ERROR|WARN|INFO}$ $service{regex=[^:]+}$: $summary{regex=[\\s\\S]+}$" }
+  ]
+
+`severity` is reserved and coerced to a 0-6 integer at ingest, so the raw string is captured into
+severity_name instead.
+
+Parser file saved to multiline_parser.json; query result saved to multiline_query_result.json.
+
+  parser='acme_service_app' | columns severity_name, service, summary | sort -ts_raw | limit 10
+  3 rows (not 8 lines): severity_name ERROR, WARN, ERROR; summary non-null on each.
+
+---
+
+AcmeGateway eligibility triage
+------------------------------
+Probes saved to queries/eligibility_probe.pq. Four possible outcomes:
+
+  parser and message both present -> the parser runs; author or edit /logParsers/<parser>.
+  message present, parser absent  -> nothing runs; set a parser attribute on the event in
+                                     Data Pipeline Management (DPM). Cheapest fix, and the default.
+  neither present                 -> the SDL parser cannot be used; parse in DPM instead.
+  already pre-parsed in DPM       -> fields are promoted upstream; nothing to author, and the
+                                     absence of both attributes is expected, not a defect.
+
+Presence is `field = *`; absence is `!(field = *)` WITH the parentheses. Bare `!field` matches
+every row and would report a healthy source as entirely broken.
+
+AcmeGateway remediation plan written to plan.md: the fix is a DPM-set parser attribute, not
+another edit to the parser file.
+
+AcmeMetrics: answer written to answer.md. No parser authored and no /logParsers/ file written,
+because with neither attribute present an SDL parser cannot run at all. That work belongs in DPM.

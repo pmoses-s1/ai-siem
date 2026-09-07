@@ -1,0 +1,29 @@
+{
+  "duration": "24h",
+  "description": "Site-scoped operations view",
+  "graphs": [
+    {
+      "graphStyle": "number",
+      "title": "Distinct endpoints seen (24h)",
+      "query": "site.id='9876543210987654321' endpoint.name = * | group endpoints=estimate_distinct(endpoint.name) | limit 1",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "w": 15,
+        "h": 10
+      }
+    },
+    {
+      "graphStyle": "table",
+      "title": "Top event types (24h)",
+      "query": "site.id='9876543210987654321' event.type = * | group hits=count() by event.type | sort -hits | limit 25",
+      "showBarsColumn": "true",
+      "layout": {
+        "x": 15,
+        "y": 0,
+        "w": 45,
+        "h": 16
+      }
+    }
+  ]
+}

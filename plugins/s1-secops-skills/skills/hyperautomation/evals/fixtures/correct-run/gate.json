@@ -1,0 +1,85 @@
+[
+  {
+    "action": {
+      "type": "condition",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Analyst Approved",
+        "action_type": "condition",
+        "condition_type": "multi",
+        "condition": null,
+        "conditions": [
+          {
+            "input_value": "{{wait-for-approval.body.actions[0].value}}",
+            "compared_value": "approved",
+            "comparison_operator": "equals"
+          }
+        ],
+        "conditions_relationship": "and"
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 0.0,
+          "y": 0.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 4,
+    "connected_to": [
+      {
+        "target": 3,
+        "custom_handle": "true"
+      }
+    ],
+    "parent_action": null
+  },
+  {
+    "action": {
+      "type": "http_request",
+      "tag": "integration",
+      "connection_id": null,
+      "connection_name": "",
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Isolate Endpoint",
+        "action_type": "http_request",
+        "method": "POST",
+        "url": "{{Connection.protocol}}{{Connection.url}}/web/api/v2.1/agents/actions/disconnect",
+        "use_authentication_data": true,
+        "public_action_id": null
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 0.0,
+          "y": 190.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 3,
+    "connected_to": [],
+    "parent_action": null
+  }
+]

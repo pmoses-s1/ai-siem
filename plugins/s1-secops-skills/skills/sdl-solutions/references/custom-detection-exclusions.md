@@ -425,12 +425,15 @@ scope), the total / excluded / kept counts, and the top suppressed values.
 - **HA-flow alert creation: ONE self-contained call, `class_uid 99602001`.** When the CIDR/wildcard
   exclusion runs via the Hyperautomation flow (`assets/exclusion_detection_ha_workflow.template.json`)
   and posts a UAM alert, use a SINGLE `/v1/alerts` POST with the indicator embedded inline in
-  `finding_info.related_events[]`, no separate `/v1/indicators` call. The alert MUST use
+  `finding_info.related_events[]`. There is no separate `/v1/indicators` call to make: that
+  endpoint refuses the console user token and the SDL Log Write Key alike, so no credential can
+  drive it, and the inline copy is what populates `alert.indicators` and the console Indicators
+  tab anyway. Alert creation itself is unaffected and still uses the console API token. The alert MUST use
   `class_uid 99602001` (S1 Security Alert), top-level `resources[]`, `metadata.version "1.6.0-dev"`,
   observables carrying `typeName`, and `state_id`/`s1_classification_id`. Generic OCSF `class_uid 2002`
   returns HTTP 202 but is silently dropped (this was the real bug). Also remember the async LRQ
   launch+poll pattern (capture `id` + `X-Dataset-Query-Forward-Tag`, then GET for `data.values`). Full
-  field list is in the `hyperautomation` skill (tenant-validated 2026-06-22).
+  field list is in the `hyperautomation` skill.
 
 ## Deployed artifacts
 

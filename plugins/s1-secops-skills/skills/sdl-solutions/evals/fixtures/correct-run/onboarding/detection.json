@@ -1,0 +1,28 @@
+{
+  "data": {
+    "name": "ACME - Outbound to newly-seen external destination",
+    "description": "Outbound connection from an enriched Acme Edge asset to an external destination not seen in the prior baseline. MITRE ATT&CK: Command and Control / T1071.",
+    "queryType": "scheduled",
+    "queryLang": "2.0",
+    "severity": "High",
+    "status": "Disabled",
+    "expirationMode": "Permanent",
+    "treatAsThreat": "UNDEFINED",
+    "networkQuarantine": false,
+    "coolOffSettings": { "renotifyMinutes": 60 },
+    "entityMappings": [
+      { "columnName": "device_agentid" },
+      { "columnName": "src_ip" },
+      { "columnName": "dst_ip" }
+    ],
+    "scheduledParams": {
+      "query": "dataSource.name = 'Acme Edge' dst_ip = * !(net_rfc1918(dst_ip)) | group hits = count(), dst_ports = estimate_distinct(dst_port), last_seen = newest(timestamp) by src_ip, dst_ip | filter hits >= 1 | lookup device_host = device_host, device_agentid = device_agentid, device_os = device_os, device_criticality = device_criticality from acmeEndpointByIp by device_ip = src_ip | columns hits, dst_ports, last_seen, src_ip, dst_ip, device_agentid, device_host, device_os, device_criticality | sort -hits | limit 100",
+      "runIntervalMinutes": 60,
+      "lookbackWindowMinutes": 60,
+      "alertPerRow": false,
+      "disableStreaksLogic": false,
+      "threshold": { "value": 0, "operator": "Greater" }
+    }
+  },
+  "filter": { "accountIds": ["1234567890123456789"] }
+}

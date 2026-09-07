@@ -1,0 +1,10 @@
+{
+  "steps": [
+    { "order": 1, "artifact": "/datatables/ingestHealthExclusions.csv", "why": "every query anti-joins it; a lookup against a table that does not exist errors 'file not found', so it goes first" },
+    { "order": 2, "artifact": "/datatables/ingestHealthDeviceLevel.csv", "why": "granularity opt-in, read by the same queries" },
+    { "order": 3, "artifact": "ingestHealthBaseline + ingestHealthSourceStats via the Baseline Builder flow", "why": "seed the baseline before anything reads it" },
+    { "order": 4, "artifact": "Spike / Drop / Lag scheduled detection rules (accountIds scope)", "why": "the bodies read the account-level lookups" },
+    { "order": 5, "artifact": "Ingest Loss Watchdog + Alert Notifier flows", "why": "publish to Shared Draft, bind the SDL connection, activate" },
+    { "order": 6, "artifact": "/dashboards/Ingest Health Monitoring", "why": "renders off the baseline tables" }
+  ]
+}

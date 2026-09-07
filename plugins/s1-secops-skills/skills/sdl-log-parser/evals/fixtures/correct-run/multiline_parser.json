@@ -1,0 +1,45 @@
+// Multi-line Java exceptions: a `[YYYY-MM-DD HH:MM:SS]` header line followed by
+// an indented stack trace. Deployed as /logParsers/acme_service_app.
+//
+// Sample event (several physical lines, one logical event):
+//   [2026-04-20 10:25:34] ERROR myservice: caught unexpected exception
+//           at com.acme.Service.run(Service.java:42)
+//   Caused by: java.lang.RuntimeException: boom
+//           ... 3 more
+//
+// Extraction plan:
+//   lineGroupers folds the trace into the header's event, so 8 physical lines
+//   become 3 logical events. The stack body stays in `message`.
+
+{
+  attributes: {
+    // Required pipeline defaults.
+    "metadata.version":    "1.0.0",
+    "dataSource.category": "security",
+    "dataSource.name":     "Acme Service",
+    "dataSource.vendor":   "Acme",
+    dataset: "acme_service"
+  },
+
+  patterns: {
+    ts: "\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"
+  },
+
+  lineGroupers: [
+    {
+      start: "^\\[\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\]",
+      continueThrough: "^(\\s+|Caused by:|\\.{3} \\d+ more)"
+    }
+  ],
+
+  formats: [
+    // `severity` is reserved and the pipeline coerces whatever lands there to
+    // an integer 0-6, so the raw ERROR/WARN/INFO word is captured into
+    // severity_name and the string survives.
+    {
+      id: "header",
+      format: "\\[$ts_raw=ts$\\] $severity_name$ $service$: $summary$",
+      halt: true
+    }
+  ]
+}

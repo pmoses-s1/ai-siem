@@ -12,6 +12,7 @@
  *   uam_get_alert           Get full alert details (notes, history)
  *   uam_add_note            Add analyst note to an alert
  *   uam_set_status          Update alert status (NEW, IN_PROGRESS, RESOLVED)
+ *   uam_available_actions   What actions this alert allows (isDisabled + reason)
  *
  * REMOVED (2026-05-03: confirmed non-functional for API tokens):
  *   purple_ai_query        : requires browser-session teamToken from /sdl/v2/graphql that
@@ -19,7 +20,7 @@
  *   purple_ai_investigate  : same root cause (SERVICE_ERROR). Use Purple MCP instead.
  */
 
-import { apiGet, apiPost, apiPut, apiDelete, apiPatch, purpleAlertSummary, uamListAlerts, uamGetAlert, uamAddNote, uamSetStatus } from '../lib/s1.js';
+import { apiGet, apiPost, apiPut, apiDelete, apiPatch, purpleAlertSummary, uamListAlerts, uamGetAlert, uamAddNote, uamSetStatus, uamAvailableActions } from '../lib/s1.js';
 
 /**
  * Defensive normalization for GET /cloud-detection/rules calls.
@@ -339,6 +340,51 @@ export const tools = [
     async handler({ alertId, status }) {
       const result = await uamSetStatus(alertId, status);
       return JSON.stringify(result, null, 2);
+    },
+  },
+
+  // ─── uam_available_actions ────────────────────────────────────────────────
+  {
+    name: 'uam_available_actions',
+    description: `Ask the API which actions can be triggered on a UAM alert, with isDisabled and disabledReason per action. This is the authoritative capability answer and the ONLY correct way to explain a refused write. A refused action returns errorMessage "Missing UAM manage permissions" whether the token lacks a scope OR the action is simply not offered for that alert type, and those need opposite responses. Measured on one tenant with one token: an alert ingested via the UAM Alert Interface (/v1/alerts) offers only S1/alert/addNote and S1/alert/eventSearch, so uam_set_status can never work on it and no token change helps; a native STAR / third-party / correlation alert offers S1/alert/statusUpdate and S1/alert/analystVerdictUpdate and the same token applies them successfully. Call this before concluding anything about permissions, and before a bulk write you cannot undo. Availability is also scope-sensitive: the S1/incident/* actions report INCIDENT_ACTIONS_ONLY_AVAILABLE_FROM_SITE_VIEW under ACCOUNT scope and are enabled under SITE, so pass scopeIds/scopeType when you care about a site-scoped action. Read-only.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        alertId: {
+          type: 'string',
+          description: 'The UAM alert ID to check.',
+        },
+        scopeIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional. Account or site ids for the scope. Defaults to every account visible to the token, resolved via GET /accounts.',
+        },
+        scopeType: {
+          type: 'string',
+          description: 'Optional. Scope type for scopeIds. Availability differs between ACCOUNT and SITE for some actions.',
+          enum: ['ACCOUNT', 'SITE', 'GROUP', 'GLOBAL'],
+        },
+      },
+      required: ['alertId'],
+    },
+    async handler({ alertId, scopeIds, scopeType }) {
+      const scope = scopeIds?.length
+        ? { scopeIds, scopeType: scopeType || 'ACCOUNT' }
+        : undefined;
+      const actions = await uamAvailableActions(alertId, scope);
+      return JSON.stringify(
+        {
+          alertId,
+          scope: scope || 'all accounts visible to the token (ACCOUNT)',
+          enabled: actions.filter((a) => !a.isDisabled).map((a) => a.id),
+          disabled: actions
+            .filter((a) => a.isDisabled)
+            .map((a) => ({ id: a.id, reason: a.disabledReason })),
+          actions,
+        },
+        null,
+        2
+      );
     },
   },
 ];

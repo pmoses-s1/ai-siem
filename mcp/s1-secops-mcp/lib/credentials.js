@@ -106,6 +106,19 @@ export function getCreds() {
     S1_CONSOLE_URL:       e('S1_CONSOLE_URL'),
     S1_CONSOLE_API_TOKEN: e('S1_CONSOLE_API_TOKEN') || e('S1_API_TOKEN'),
     S1_HEC_INGEST_URL:    e('S1_HEC_INGEST_URL'),
+    // SDL Log Write Key, used ONLY for log ingest over the event collector.
+    // Optional: every other tool authenticates with S1_CONSOLE_API_TOKEN, and a
+    // deployment that never ingests logs does not need this at all.
+    //
+    // It is a DIFFERENT credential, not an alias. The collector refuses a
+    // console user token, and the key is minted for one account or site and
+    // writes only there, so it also fixes the destination: there is no scope
+    // header to override. Mint it at Console > Singularity Data Lake >
+    // API Keys > Log Write Key. No API creates one.
+    //
+    // Named to match the deployer repos, which already ship this variable, so
+    // one value can be pasted across all of them.
+    S1_HEC_TOKEN:         e('S1_HEC_TOKEN'),
     // Default S1-Scope for SDL requests: "<accountId>" for account scope or
     // "<accountId>:<siteId>" for site scope. Optional. Per-call scope arguments
     // override it; passing scope:null suppresses it entirely. SDL reads are

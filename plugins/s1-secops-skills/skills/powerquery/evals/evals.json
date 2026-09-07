@@ -1,0 +1,247 @@
+{
+  "skill_name": "powerquery",
+  "evals": [
+    {
+      "id": 0,
+      "name": "powershell-outbound-hunt",
+      "prompt": "Hunt for powershell processes that made an outbound connection to a non-RFC1918 address in the last 24 hours. I want one row per endpoint and storyline, with a hit count, the distinct destination IPs, and a representative command line, ordered by the noisiest first and capped at 50 rows. Save the query on its own to `queries/powershell_outbound.pq`, run it against the tenant, and tell me in your reply which API endpoint you ran it through and what it returned.",
+      "expected_output": "A query opening with a field predicate (`src.process.name contains 'powershell' dst.ip.address = *`), splitting internal from external with `net_rfc1918(dst.ip.address)` rather than hand-rolled CIDR ranges, aggregating with `group ... by endpoint.name, src.process.storyline.id`, ordering with `| sort -hits`, and terminating with `| limit 50`. Execution goes through the Long Running Query API at POST /sdl/v2/api/queries on the console host, not the deprecated /api/powerQuery or /dv/events/pq endpoints. The reply names that endpoint and reports the row count.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "queries/powershell_outbound.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/powershell_outbound.pq",
+          "pattern": "net_rfc1918\\("
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/powershell_outbound.pq",
+          "pattern": "\\|\\s*sort\\s+-"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/powershell_outbound.pq",
+          "pattern": "\\|\\s*limit\\s+\\d+"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "/sdl/v2/api/queries"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "absent-field-reconcile",
+      "prompt": "Some of our FortiGate events look like they are missing the destination-port field and I want to know how many. Write me two PowerQueries against `dataSource.name='FortiGate'` over the last 24 hours: one counting the events where `dst.port.number` is populated, one counting the events where it is absent. Save them as `queries/dstport_present.pq` and `queries/dstport_absent.pq` (query text only, no comments), run both, and show me the two counts so I can check they add up to the total.",
+      "expected_output": "The absent query uses the parenthesised idiom `!(dst.port.number = *)`. Bare `!dst.port.number` is wrong: it matches every row and silently reports the whole source as missing the field. `dst.port.number == null` is also wrong and returns HTTP 500. The present query uses `dst.port.number = *`. Both counts are reported as numbers and reconcile against the source total.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "queries/dstport_absent.pq"
+        },
+        {
+          "type": "pq_valid",
+          "glob": "queries/dstport_present.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/dstport_absent.pq",
+          "pattern": "!\\(\\s*[A-Za-z][A-Za-z0-9_.]*\\s*=\\s*\\*\\s*\\)"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/dstport_present.pq",
+          "pattern": "[A-Za-z][A-Za-z0-9_.]*\\s*=\\s*\\*"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\b\\d+[^\\n]{0,40}\\b(?:events?|rows?|matches)\\b"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "correlation-rule-for-burst-then-success",
+      "prompt": "I need a Custom Detection rule for this: a single user racks up 10 or more failed VPN logons and then succeeds, all inside a 5 minute window. I care about catching it as it happens, not on the next scheduled run. Pick the right rule type, explain why that type and not the other two, and write the full creation payload for POST /web/api/v2.1/cloud-detection/rules to `rule.json`.",
+      "expected_output": "A `correlation` rule. Not `scheduled`, because the requirement is real time. Not `events`, because neither half is damning on its own. The payload carries `data.queryLang: \"2.0\"`, `data.s1ql: \"\"` (correlation logic lives entirely in `correlationParams`), `correlationParams.entity: \"user\"`, `matchInOrder: true` so the failures must precede the success, `timeWindow.windowMinutes: 5`, and two `subQueries` entries, the first with `matchesRequired: 10` for the failed logons and the second with `matchesRequired: 1` for the success.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "rule.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "rule.json",
+          "path": "data.queryType",
+          "equals": "correlation"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "rule.json",
+          "path": "data.queryLang",
+          "equals": "2.0"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "rule.json",
+          "path": "data.correlationParams.matchInOrder",
+          "equals": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "rule.json",
+          "path": "data.correlationParams.timeWindow.windowMinutes",
+          "equals": 5
+        },
+        {
+          "type": "file_json_path",
+          "glob": "rule.json",
+          "path": "data.correlationParams.subQueries.0.matchesRequired",
+          "equals": 10
+        },
+        {
+          "type": "file_matches",
+          "glob": "rule.json",
+          "pattern": "\"s1ql\"\\s*:\\s*\"\""
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "custom-correlation-key",
+      "prompt": "I want a correlation rule that ties a Process Creation event to an IP Connect event from the same process tree within 10 minutes. The two sides hold the identity in different places: on the process-creation side it is `src.process.parent.storyline.id`, on the connect side it is `tgt.process.storyline.id`. The built-in `user` and `ip` correlation keys are no use here. Write just the `correlationParams` block to `correlation_params.json` and tell me what the API rejects if I get the shape wrong.",
+      "expected_output": "`entity` is set to `\"custom\"` and the key is supplied as `entitiesAndFields`, a list of lists with one inner list per sub-query, matched positionally: `[[\"src.process.parent.storyline.id\"], [\"tgt.process.storyline.id\"]]`. The field is not called `customEntityKey` (that returns `Unknown field`), a flat list of strings fails with `Not a valid list` on element 0, and repeating the same field path in both inner lists fails with `entityFields contains duplicate alias(es)`, which is exactly why the two sides must be named by two different field paths. `timeWindow.windowMinutes` is 10 and there are two `subQueries` entries.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "correlation_params.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "correlation_params.json",
+          "path": "entity",
+          "equals": "custom"
+        },
+        {
+          "type": "file_matches",
+          "glob": "correlation_params.json",
+          "pattern": "\"entitiesAndFields\"\\s*:\\s*\\[\\s*\\["
+        },
+        {
+          "type": "file_json_path",
+          "glob": "correlation_params.json",
+          "path": "entitiesAndFields.0.0",
+          "matches": "^src\\."
+        },
+        {
+          "type": "file_json_path",
+          "glob": "correlation_params.json",
+          "path": "entitiesAndFields.1.0",
+          "matches": "^tgt\\."
+        },
+        {
+          "type": "file_json_path",
+          "glob": "correlation_params.json",
+          "path": "timeWindow.windowMinutes",
+          "equals": 10
+        },
+        {
+          "type": "file_matches",
+          "glob": "correlation_params.json",
+          "pattern": "customEntityKey",
+          "count": 0
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "scheduled-rule-entity-binding",
+      "prompt": "Build me a scheduled Custom Detection rule that fires when one endpoint has 5 or more distinct blocked destination ports inside an hour. The last three scheduled rules we shipped all show up as \"Unknown Device\" in the alert, so make sure this one actually names the endpoint. Save the PowerQuery body on its own to `queries/blocked_ports.pq` and the full creation payload to `scheduled_rule.json`.",
+      "expected_output": "A `scheduled` rule with the PowerQuery in `data.scheduledParams.query`. The body projects the endpoint column, and that exact output column name is repeated in top-level `data.entityMappings` as `[{\"columnName\": \"endpoint.name\"}]`. Projecting the column without naming it in `entityMappings` is what produces \"Unknown Device\", so both are required. Scheduled rules take no inline mitigation: `treatAsThreat` is `\"UNDEFINED\"` and `networkQuarantine` is `false`. The body stays within the 1,000-row / 1 MB budget and contains no `nolimit`.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "queries/blocked_ports.pq"
+        },
+        {
+          "type": "json_parses",
+          "glob": "scheduled_rule.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "scheduled_rule.json",
+          "path": "data.queryType",
+          "equals": "scheduled"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "scheduled_rule.json",
+          "path": "data.scheduledParams.query",
+          "exists": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "scheduled_rule.json",
+          "path": "data.entityMappings.0.columnName",
+          "exists": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "scheduled_rule.json",
+          "path": "data.treatAsThreat",
+          "equals": "UNDEFINED"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "scheduled_rule.json",
+          "path": "data.networkQuarantine",
+          "equals": false
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/blocked_ports.pq",
+          "pattern": "\\|\\s*nolimit",
+          "count": 0
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "fix-generated-query",
+      "prompt": "Purple AI handed me this and the console comes back with HTTP 500 \"Unable to parse the entire query\":\n\n    * | filter event.type == 'Process Creation' | group cnt = count() by endpoint.name | sort cnt desc | head 20\n\nFix it, save the corrected query and nothing else to `queries/fixed.pq`, and walk me through each defect so I stop pasting these straight in.",
+      "expected_output": "Three defects. A bare `*` is not a valid initial filter and returns HTTP 500 \"Don't understand [*]\"; the query should open with a real field predicate such as `event.type = 'Process Creation'` and drop the redundant `| filter`. `sort cnt desc` is SQL syntax; PowerQuery uses the `-` / `+` prefix, so `| sort -cnt`. `| head 20` is not a command; the correct one is `| limit 20`. The explanation names all three, including `head` and `desc` by name.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "queries/fixed.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/fixed.pq",
+          "pattern": "\\A[A-Za-z][A-Za-z0-9_.]*\\s*(?:==|=|!=|\\bcontains\\b|\\bmatches\\b|\\bin\\b)"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/fixed.pq",
+          "pattern": "\\|\\s*sort\\s+-cnt\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "queries/fixed.pq",
+          "pattern": "\\|\\s*limit\\s+20\\b"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\bhead\\b"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\bdesc\\b"
+        }
+      ]
+    }
+  ]
+}

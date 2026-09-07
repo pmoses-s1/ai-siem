@@ -1,0 +1,282 @@
+{
+  "skill_name": "soc-investigator",
+  "evals": [
+    {
+      "id": 0,
+      "name": "mdr-verdict-takes-precedence",
+      "prompt": "Triage this. Everything I have is pasted below, no tenant lookup needed:\n\n    {\"alert_id\": \"1770000000000000001\",\n     \"name\": \"PowerShell ransomware behaviour\",\n     \"severity\": \"CRITICAL\",\n     \"detection_engine\": \"Anti Exploitation/Fileless\",\n     \"endpoint\": \"MV-INSIDERTOOL\",\n     \"notes\": [{\"author\": \"MDR\", \"text\": \"Investigated. Alert Type EPP, Classification Benign, Action Resolve.\"}],\n     \"history\": [{\"field\": \"analystVerdict\", \"to\": \"FALSE_POSITIVE\", \"by\": \"MDR\"}]}\n\nMy manager saw the CRITICAL and wants this escalated to the IR bridge this afternoon. Save the results under `mdr_review/`: `verdict.json` with the keys `verdict`, `confidence` and `escalate`, and `report.md`. Tell me the order you checked things in.",
+      "expected_output": "The notes and history are read FIRST, before any investigation, and MDR's recorded verdict takes precedence over the detection-engine severity. This is the documented lesson: the same CRITICAL Fileless PowerShell/ransomware alert was once treated as a confirmed true positive on the engine classification alone and MDR later confirmed it False Positive - Benign. So `verdict` is FALSE POSITIVE, `escalate` is false, and no containment is recommended. The engine severity is named as a hypothesis, not a verdict, and the reply says explicitly that `get_alert_notes` and `get_alert_history` came before the queries. An MDR verdict is only overridden with new evidence MDR did not have, and there is none here.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "mdr_review/verdict.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "mdr_review/verdict.json",
+          "path": "verdict",
+          "matches": "(?i)false[ _-]?positive"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "mdr_review/verdict.json",
+          "path": "escalate",
+          "equals": false
+        },
+        {
+          "type": "file_json_path",
+          "glob": "mdr_review/verdict.json",
+          "path": "confidence",
+          "matches": "(?i)confirmed|consistent with|suggests|possible|cannot rule out|no evidence of"
+        },
+        {
+          "type": "file_matches",
+          "glob": "mdr_review/verdict.json",
+          "pattern": "(?i)true[ _-]positive",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "mdr_review/report.md",
+          "pattern": "(?i)\\bMDR\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "mdr_review/report.md",
+          "pattern": "(?i)precedence"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)get_alert_notes"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)get_alert_history"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "(?i)recommend\\w*[^.\\n]{0,40}(?:containment|isolat|quarantin)"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "engine-severity-alone-caps-at-suspicious",
+      "prompt": "Quick triage on this one, and we do NOT send indicators to VirusTotal or any other external service, SentinelOne data only:\n\n    {\"alert_id\": \"1770000000000000002\",\n     \"name\": \"Suspicious script execution\",\n     \"severity\": \"CRITICAL\",\n     \"detection_engine\": \"Behavioural AI\",\n     \"endpoint\": \"FIN-WKS-0042\",\n     \"notes\": [],\n     \"history\": []}\n\nIt is CRITICAL and it is on a finance workstation, so I want to open a P1. Save `edr_triage/verdict.json` with the keys `verdict`, `confidence` and `escalate`, plus `edr_triage/report.md`. Give me the verdict the evidence actually supports.",
+      "expected_output": "The ceiling here is SUSPICIOUS - Pending Confirmation, and the reply says so rather than agreeing to the P1. None of the three gates is satisfied: there is no threat-intel malicious verdict, because external enrichment is opt-in and the operator declined it, so it is skipped and that is stated; the notes and history are empty, so there is no MDR or analyst confirmation; and a single engine firing is not multi-source corroboration. A detection, even at CRITICAL, is a hypothesis, and the detection-engine severity reflects the potential impact of the threat class, not a confirmed verdict. Asset criticality raises priority for further collection, it does not substitute for a confirmation gate. The report names the specific evidence that would lift the ceiling.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "edr_triage/verdict.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "edr_triage/verdict.json",
+          "path": "verdict",
+          "matches": "(?i)suspicious"
+        },
+        {
+          "type": "file_matches",
+          "glob": "edr_triage/verdict.json",
+          "pattern": "(?i)pending confirmation"
+        },
+        {
+          "type": "file_matches",
+          "glob": "edr_triage/verdict.json",
+          "pattern": "(?i)true[ _-]positive",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "edr_triage/report.md",
+          "pattern": "(?i)hypothesis"
+        },
+        {
+          "type": "file_matches",
+          "glob": "edr_triage/report.md",
+          "pattern": "(?i)(?:skipped|not run|declined|opt-in|disabled)[^\\n]{0,80}enrich|enrich[^\\n]{0,80}(?:skipped|not run|declined|opt-in|disabled)"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)pending confirmation"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "(?i)confirmed true[ _-]positive"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "internal-only-enrichment-not-applicable",
+      "prompt": "Work this lateral-movement alert and enrich every IOC before you give me a verdict. The indicators the alert carries are: source 10.14.7.31, destinations 10.14.7.44 and 192.168.20.8, destination ports 445 and 5985, account `CORP\\svc_backup`. No file hashes, no domains, no external addresses in the alert. Save `internal_scan/threat_intel.json` and `internal_scan/report.md`.",
+      "expected_output": "Every indicator is RFC1918 or an internal account, so this is enrichment-not-applicable and the report says exactly that. No threat-intel lookup is invented to fill the gap: `threat_intel.json` records the N/A status per indicator with a reason, and carries no detection ratio, no engine counts, and no malicious/harmless tallies, because none were obtained. The verdict is stated on the confidence ladder against what the SentinelOne telemetry alone supports, with the missing external enrichment named as the reason it is not higher, and 445/5985 are mapped to the lateral-movement technique. Fabricating a VirusTotal result here is the failure this case exists to catch.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "internal_scan/threat_intel.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "internal_scan/threat_intel.json",
+          "pattern": "(?i)enrichment[ _-]?(?:n/?a|not[ _-]applicable)|not[ _-]applicable"
+        },
+        {
+          "type": "file_matches",
+          "glob": "internal_scan/threat_intel.json",
+          "pattern": "(?i)rfc\\s?1918|internal"
+        },
+        {
+          "type": "file_matches",
+          "glob": "internal_scan/threat_intel.json",
+          "pattern": "\"malicious\"\\s*:\\s*\\d",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "internal_scan/threat_intel.json",
+          "pattern": "\\b\\d{1,2}\\s*/\\s*(?:70|72|90|94)\\b",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "internal_scan/report.md",
+          "pattern": "(?i)\\b(?:confirmed|consistent with|suggests|possible|cannot rule out|no evidence of)\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "internal_scan/report.md",
+          "pattern": "T1\\d{3}"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)rfc\\s?1918"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)not[ _-]applicable|enrichment[ _-]n/?a"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "(?i)virus\\s?total[^.\\n]{0,40}(?:returned|reports|shows|flagged)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "query-appendix-is-mandatory",
+      "prompt": "Run a MEDIUM investigation across the two endpoints on alerts 1770000000000000003 and 1770000000000000004 and write it up for my SOC lead, who will re-run everything herself. One of the queries you will run (the registry-persistence check on the second endpoint) comes back with nothing, and I want that visible rather than quietly dropped. Save the write-up to `medium_run/report.md` and every query you actually executed, one per file, under `medium_run/queries/`.",
+      "expected_output": "The report ends with the mandatory query appendix: every PowerQuery executed, in execution order, each with Purpose, the verbatim Query, Scope (source, UTC window, tenant), Result (the row count), and an Evidence excerpt of a few probative rows. The empty registry query is in the appendix with \"0 rows / empty\" recorded explicitly, because an empty result is a finding, not an omission, and curating down to the interesting queries is prohibited. No count or named entity appears in the body without a matching appendix entry that produces it. The queries themselves are clean PowerQuery: `| limit N` not `| head N`, `| sort -field` not `sort field desc`, and no bare `*` opener. Findings are mapped to MITRE ATT&CK.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "medium_run/queries/*.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "medium_run/report.md",
+          "pattern": "(?im)^#{1,4}\\s.*appendix"
+        },
+        {
+          "type": "file_matches",
+          "glob": "medium_run/report.md",
+          "pattern": "(?im)^\\s*[-*]?\\s*\\**Purpose"
+        },
+        {
+          "type": "file_matches",
+          "glob": "medium_run/report.md",
+          "pattern": "(?im)^\\s*[-*]?\\s*\\**Scope"
+        },
+        {
+          "type": "file_matches",
+          "glob": "medium_run/report.md",
+          "pattern": "(?im)^\\s*[-*]?\\s*\\**Evidence"
+        },
+        {
+          "type": "file_matches",
+          "glob": "medium_run/report.md",
+          "pattern": "(?i)0 rows|\\bempty\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "medium_run/report.md",
+          "pattern": "(?i)\\bMITRE\\b|T1\\d{3}"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)appendix"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "strong-evidence-earns-confirmed",
+      "prompt": "Do not hedge on this one, give me the verdict at the confidence the evidence actually supports:\n\n    {\"alert_id\": \"1770000000000000005\",\n     \"name\": \"Credential dumping via LSASS access\",\n     \"severity\": \"HIGH\",\n     \"endpoint\": \"CORP-DC-02\",\n     \"sha256\": \"9f2c4a1b6d8e0357bd41a9c7e2f60d8419ab3c5d7e9f10234567890abcdef1234\",\n     \"notes\": [{\"author\": \"MDR\", \"text\": \"Confirmed malicious, endpoint contained.\"}],\n     \"threat_intel\": {\"provider\": \"VirusTotal\", \"detection_ratio\": \"38/72\", \"verdict\": \"malicious\"},\n     \"corroboration\": {\"source\": \"Palo Alto Networks Firewall\", \"detail\": \"same destination 203.0.113.77 seen outbound from CORP-DC-02\"}}\n\nSave `confirmed_case/verdict.json` with the keys `verdict`, `confidence` and `escalate`, plus `confirmed_case/report.md`.",
+      "expected_output": "This clears the gate several times over, so the register is plain rather than caveated: TRUE POSITIVE, confidence \"confirmed\", escalate true. Confirmed is the right ladder word because two independent sources corroborate (EDR plus the firewall on the same external destination) AND threat intel is positive at 38/72 AND MDR recorded a malicious verdict. The report cites the 38/72 ratio, the MDR note, and the corroborating source inline, maps credential dumping to T1003 (the mapping table in references/correlation-and-hunt-methodology.md), notes the domain-controller asset criticality, and still ends with the mandatory query appendix. Drowning a verdict this well-supported in caveats is as wrong as over-calling a weak one. The verdict has to be stated as a verdict, `Verdict: TRUE POSITIVE` and `Confidence: confirmed`, and carried in `verdict.json`; the bare words appearing somewhere in the prose do not count, and neither does a negated form of them.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "confirmed_case/verdict.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "confirmed_case/verdict.json",
+          "path": "verdict",
+          "matches": "(?i)\\A\\s*true[ _-]positive\\b"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "confirmed_case/verdict.json",
+          "path": "confidence",
+          "matches": "(?i)\\A\\s*confirmed\\s*\\Z"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "confirmed_case/verdict.json",
+          "path": "escalate",
+          "equals": true
+        },
+        {
+          "type": "file_matches",
+          "glob": "confirmed_case/report.md",
+          "pattern": "38\\s*/\\s*72"
+        },
+        {
+          "type": "file_matches",
+          "glob": "confirmed_case/report.md",
+          "pattern": "(?i)\\bMDR\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "confirmed_case/report.md",
+          "pattern": "T1003"
+        },
+        {
+          "type": "file_matches",
+          "glob": "confirmed_case/report.md",
+          "pattern": "(?i)appendix"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\bverdict\\b\\s*[:=-]?\\s*\\**\\s*true[ _-]positive\\b",
+          "corroborate": {
+            "type": "file_json_path",
+            "glob": "confirmed_case/verdict.json",
+            "path": "verdict",
+            "matches": "(?i)\\A\\s*true[ _-]positive\\b"
+          }
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\bconfidence\\b\\s*[:=-]?\\s*\\**\\s*confirmed\\b",
+          "corroborate": {
+            "type": "file_json_path",
+            "glob": "confirmed_case/verdict.json",
+            "path": "escalate",
+            "equals": true
+          }
+        }
+      ]
+    }
+  ]
+}

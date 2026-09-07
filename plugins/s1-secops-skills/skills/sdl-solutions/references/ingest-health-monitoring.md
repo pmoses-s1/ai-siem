@@ -94,7 +94,7 @@ Mechanics:
    `assets/ingesthealth_devicelevel.csv.template` -> `/datatables/ingestHealthDeviceLevel.csv` (sources to
    monitor per device; absent = source level). Edit either later to change scope/granularity without
    touching any query.
-2. Baseline: `flows/ha_flow_1_baseline_builder.json` (2 per-device savelookups/7d, daily). Bind
+2. Baseline: `assets/ingesthealth_baseline_builder.workflow.template.json` (2 per-device savelookups/7d, daily). Bind
    "SentinelOne SDL" (Bearer). Seed once before anything reads the tables.
 3. Detections: POST the unified rules in `assets/ingesthealth_detections.template.json` to
    `/cloud-detection/rules` (`scheduled`, `queryLang 2.0`), scope accountIds ONLY: the rule bodies read

@@ -9,15 +9,19 @@
  *   Scope : S1-Scope: <accountId>[:<siteId>[:<groupId>]]  (mandatory)
  *
  * Endpoints:
- *   POST /v1/indicators : OCSF behavioral indicators (batch: N per call)
- *   POST /v1/alerts     , OCSF SecurityAlert         (ONE per call, see below)
+ *   POST /v1/alerts     , OCSF SecurityAlert (ONE per call, see below)
  *
- * Critical constraints (empirically confirmed on your-tenant 2026-04-22):
+ * INDICATORS ARE NOT SEPARATELY INGESTIBLE. There is no usable POST
+ * /v1/indicators any more: the endpoint refuses the console user token AND the
+ * SDL Log Write Key, so no credential can drive it. Every indicator now rides
+ * inside the alert, in finding_info.related_events[], and the Indicators tab in
+ * the console is fed from there. This removed the sleep, the ordering contract
+ * and a whole class of silent drop, so the single POST is simpler as well as
+ * being the only thing that works.
+ *
+ * Critical constraints (empirically confirmed on a live tenant):
  *   - ONE alert per POST /v1/alerts. Multi-alert bodies return HTTP 202 but the
  *     stitcher silently drops all but one. Loop callers for multiple alerts.
- *   - Sleep ~3s between POST /v1/indicators and POST /v1/alerts. If the alert
- *     lands before the indicator's metadata.uid is registered the stitcher silently
- *     drops the alert (still HTTP 202). ingestAlert() enforces the sleep.
  *   - file.hashes MUST be OCSF Fingerprint array [{algorithm_id, algorithm, value}],
  *     NOT a plain dict. Dict form causes silent drop even on HTTP 202.
  *   - finding_info.related_events[] entries MUST carry class_uid, type_uid,
@@ -197,13 +201,16 @@ export function buildFileIndicator({
  *
  * Returns a complete alert object ready to POST to /v1/alerts (one at a time).
  *
- * @param {boolean} [inline=false]
- *   false (default): related_events[] contains only the reference fields (uid, class_uid,
- *     type_uid, etc.) and observables. The stitcher resolves the full indicator from a
- *     prior /v1/indicators POST via metadata.uid. Use with ingestAlert() (two-call flow).
- *   true: related_events[] embeds the full indicator context (file, device, actor) inline.
- *     No separate /v1/indicators POST is required: everything ships in one /v1/alerts call.
- *     Use with ingestAlertInline() (single-call flow).
+ * @param {boolean} [inline=true]
+ *   The only supported value is true, and it is the default. related_events[] embeds the
+ *   full indicator context (file, device, actor) inline and everything ships in one
+ *   /v1/alerts call.
+ *
+ *   Passing false used to emit reference-only entries for the stitcher to resolve against
+ *   a prior /v1/indicators POST. That POST is no longer possible, so a reference-only
+ *   alert now resolves to nothing: it is accepted with HTTP 202 and shows an empty
+ *   Indicators tab. The parameter is still accepted so old callers do not crash, but it
+ *   is forced to true and a warning is emitted.
  */
 export function buildSecurityAlert({
   alertUid,
@@ -212,7 +219,7 @@ export function buildSecurityAlert({
   description = 'Synthetic test alert created by s1-secops-mcp uam_ingest_alert.',
   detectionProduct = 'smoke-product',
   detectionVendor = 'smoke-vendor',
-  inline = false,
+  inline = true,
   nowMs,
 } = {}) {
   const ts = nowMs || Date.now();
@@ -286,72 +293,19 @@ export function buildSecurityAlert({
 
 // ─── High-level end-to-end helpers ────────────────────────────────────────────
 
-/**
- * Create a synthetic test alert in UAM end-to-end.
+/* ingestAlert(), the two-step indicator-then-alert flow, was REMOVED.
  *
- * Builds an OCSF FileSystem Activity indicator and a SecurityAlert,
- * POSTs them to the HEC ingest host with the required 3s sleep in between,
- * and returns the UIDs and HTTP responses.
+ * It posted the indicator to /v1/indicators, slept ~3s for the stitcher, then
+ * posted an alert referencing it by uid. That path no longer works: the
+ * indicators endpoint refuses both the console user token and the SDL Log Write
+ * Key, so there is no credential that can drive it. Indicators are now carried
+ * inline in the alert body instead, which is what ingestAlertInline() below
+ * does, and which never needed the sleep or the sequencing in the first place.
  *
- * The alert typically surfaces in UAM within 30-60s. Search by title or
- * poll uam_list_alerts.
- *
- * @param {object} opts
- * @param {string} opts.scope           accountId or "accountId:siteId" (mandatory)
- * @param {string} [opts.title]         Alert name shown in UAM (default: "MCP Test Alert")
- * @param {string} [opts.description]   Alert description
- * @param {string} [opts.hostname]      Hostname for the indicator device
- * @param {string} [opts.filename]      Filename for the FileSystem indicator
- * @param {string} [opts.sha256]        SHA-256 hash (64 hex chars); random if omitted
- * @param {number} [opts.sleepMs=3000]  Sleep between indicator POST and alert POST
+ * Deliberately deleted rather than left throwing: a function that can only fail
+ * invites callers to keep a code path alive for it.
  */
-export async function ingestAlert({
-  scope,
-  title = 'MCP Test Alert',
-  description = 'Synthetic test alert created by s1-secops-mcp uam_ingest_alert.',
-  hostname = 'mcp-test-host',
-  filename = 'test-payload.exe',
-  sha256,
-  sleepMs = 3000,
-} = {}) {
-  if (!scope) throw new Error('scope is required (accountId or "accountId:siteId").');
 
-  const nowMs = Date.now();
-  const indicatorUid = randomUUID();
-  const alertUid = randomUUID();
-
-  const indicator = buildFileIndicator({
-    indicatorUid,
-    filename,
-    sha256,
-    hostname,
-    nowMs,
-  });
-
-  const indicatorResp = await hecPost('/v1/indicators', [indicator], scope);
-
-  // Wait for the stitcher to register the indicator uid before posting the alert.
-  // Reducing below ~2s has been observed to cause silent drops on loaded tenants.
-  await sleep(sleepMs);
-
-  const alert = buildSecurityAlert({
-    alertUid,
-    indicator,
-    title,
-    description,
-    nowMs,
-  });
-
-  const alertResp = await hecPost('/v1/alerts', alert, scope);
-
-  return {
-    indicator_uid: indicatorUid,
-    alert_uid: alertUid,
-    indicator_response: indicatorResp,
-    alert_response: alertResp,
-    next_step: `Allow 30-60s then call uam_list_alerts to find the alert by title "${title}". Use uam_get_alert with the returned ID for full details.`,
-  };
-}
 
 /**
  * Create a synthetic test alert in UAM in a single /v1/alerts POST.
@@ -411,15 +365,10 @@ export async function ingestAlertInline({
 
 // ─── Low-level raw-payload helpers ────────────────────────────────────────────
 
-/**
- * POST raw OCSF indicators to /v1/indicators.
- * Caller is responsible for correct OCSF shape.
+/* postIndicators() was REMOVED along with the /v1/indicators path it wrapped.
+ * See the note above ingestAlertInline(). Indicators ride inside the alert.
  */
-export async function postIndicators({ scope, indicators }) {
-  if (!scope) throw new Error('scope is required.');
-  const items = Array.isArray(indicators) ? indicators : [indicators];
-  return hecPost('/v1/indicators', items, scope);
-}
+
 
 /**
  * POST a single raw OCSF SecurityAlert to /v1/alerts.
@@ -437,7 +386,14 @@ export async function postAlert({ scope, alert }) {
   return hecPost('/v1/alerts', alert, scope);
 }
 
-/** True if HEC ingest credentials are configured. */
+/** True if UAM ingest credentials are configured.
+ *
+ *  UAM alert ingest posts OCSF to /v1/alerts on the ingest host and authenticates
+ *  with the CONSOLE token, not the Log Write Key: alert creation and IOCs are
+ *  user-token operations. Only raw log ingest over the event collector uses
+ *  S1_HEC_TOKEN, and that is checked separately in hec.js. Conflating the two is
+ *  what made this function demand the wrong credential.
+ */
 export function hasHecCreds() {
   const c = getCreds();
   return !!(c.S1_HEC_INGEST_URL && c.S1_CONSOLE_API_TOKEN);

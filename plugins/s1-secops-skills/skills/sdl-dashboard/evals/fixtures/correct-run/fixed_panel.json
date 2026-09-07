@@ -1,0 +1,12 @@
+{
+  "title": "Traffic over time",
+  "graphStyle": "stacked_bar",
+  "xAxis": "time",
+  "query": "dataSource.name='FortiGate' | group c=count() by timestamp=timebucket('1h'), act=unmapped.action | transpose act on timestamp",
+  "layout": {
+    "x": 0,
+    "y": 0,
+    "w": 60,
+    "h": 16
+  }
+}
