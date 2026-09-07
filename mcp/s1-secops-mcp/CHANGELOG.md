@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.3.7
+
+Minor, not patch: a tool is gone and the log-ingest credential changed. Both
+break an existing caller, so the version says so.
+
+### Log ingest needs an SDL Log Write Key
+
+`hec_ingest` now authenticates with **`S1_HEC_TOKEN`**, an SDL Log Write Key,
+and no longer sends an `S1-Scope` header. The Management Console API token is
+refused by the event collector. Measured on a live tenant, same request, same
+endpoint:
+
+    write key      -> HTTP 200 {"text":"Success","code":0}
+    console token  -> HTTP 400 {"text":"Missing S1-Scope header","code":5}
+
+The key is minted per account or site and writes only there, so it fixes the
+destination and there is nothing for a scope header to override. Mint it at
+Console > Singularity Data Lake > API Keys > Log Write Key; no API creates one.
+`S1_HEC_TOKEN` is optional, because only raw log ingest needs it, and it is named
+to match the deployer repos so one value covers both.
+
+UAM alert ingest and IOCs are NOT affected. They still use
+`S1_CONSOLE_API_TOKEN`, and `/v1/alerts` still requires `S1-Scope`.
+
+### Indicators ride inside the alert
+
+**`uam_post_indicators` is removed** (32 tools -> 31). Indicators can no longer
+be ingested on their own: `/v1/indicators` refuses the console user token and the
+Log Write Key alike, so no credential can drive it. They now travel inline in
+`finding_info.related_events[]` on a single `POST /v1/alerts`, which is also what
+the console Indicators tab reads.
+
+`uam_ingest_alert` posts once, inline. The `inline` parameter is still accepted
+so existing callers do not crash, but it is forced to true and a false value
+comes back with a note saying it was ignored, rather than quietly doing something
+different. The old two-call flow, its ~3s sleep and its ordering contract are
+deleted rather than left throwing: a code path that can only fail invites callers
+to keep it alive.
+
+Verified end to end on a live tenant: one alert carrying four indicators inline
+in a single POST surfaced in UAM with all four rendered and every uid matching.
+
+### Also
+
+- `Indicator` in the UAM GraphQL schema has fields `type, uid, title,
+  description, message, severity`. There is no `name` and no `category`;
+  querying either returns `FieldUndefined`. Examples across the docs used them.
+- `sdlToken`'s missing-credential test now runs in a child process. It deleted an
+  env var, but credentials are resolved once at import and fall back to a file,
+  so the exception it asserted could only be thrown on a machine with no
+  credentials at all. It passed in CI for exactly that reason.
+
 ## 1.3.6 - 2026-08-17
 
 Behaviour change, found by deploying to a real site and not being able to see the

@@ -200,22 +200,67 @@ UAM owns everything in the modern Alerts inbox, including alert notes, alert his
 2. Show the user the exact filter + action list + count.
 3. Only after explicit confirmation, call `trigger_actions(...)` or one of the `set_alert_status` / `set_analyst_verdict` / `assign_alerts` convenience wrappers (all of which constrain the filter to an explicit alert-id list by default).
 
-## UAM Alert Interface (Unified Alert Management) -- pushing OCSF indicators + alerts INTO UAM
+## UAM Alert Interface (Unified Alert Management) -- pushing OCSF alerts INTO UAM
 
-Everything else in this skill talks to `<tenant>.sentinelone.net/web/api/v2.1/...` (the Mgmt Console) and is read-or-mutate on pre-existing server state. The **UAM Alert Interface** (formerly "Ingestion Gateway") is a separate API family on a separate host for the write-side path: it lets you push OCSF-formatted indicators and alerts INTO UAM so they show up in the console as real alerts with attached indicators. Use it when a user asks to "create an alert", "ingest indicators", "send alerts from my pipeline", or "test alert ingestion".
+Everything else in this skill talks to `<tenant>.sentinelone.net/web/api/v2.1/...` (the Mgmt Console) and is read-or-mutate on pre-existing server state. The **UAM Alert Interface** (formerly "Ingestion Gateway") is a separate API family on a separate host for the write-side path: it lets you push OCSF-formatted alerts INTO UAM so they show up in the console as real alerts with attached indicators. Use it when a user asks to "create an alert", "ingest indicators", "send alerts from my pipeline", or "test alert ingestion".
 
 **Host and wire contract:**
 
-- Prod (US1): `https://ingest.us1.sentinelone.net`. This is the SentinelOne HEC (HTTP Event Collector) ingest host, shared between log ingest and OCSF alert/indicator ingest. Configure via the `S1_HEC_INGEST_URL` env var, the `--uam-url` flag, or the `S1_HEC_INGEST_URL` key in `credentials.json`. The former canonical `S1_UAM_ALERT_INTERFACE_URL` and legacy snake_case `uam_alert_interface_url` are still honored as fallbacks.
-- Auth: `Authorization: Bearer <JWT>`. NOT `ApiToken`. The mgmt-console JWT from `S1_CONSOLE_API_TOKEN` works; the endpoint rejects `ApiToken ...` with HTTP 401 `"Unsupported auth type"`.
+- Prod (US1): `https://ingest.us1.sentinelone.net`. This is the SentinelOne ingest host, shared between raw log ingest and OCSF alert ingest. Configure via the `S1_HEC_INGEST_URL` env var, the `--uam-url` flag, or the `S1_HEC_INGEST_URL` key in `credentials.json`. The former canonical `S1_UAM_ALERT_INTERFACE_URL` and legacy snake_case `uam_alert_interface_url` are still honored as fallbacks.
+- Auth: `Authorization: Bearer <JWT>`. NOT `ApiToken`. The mgmt-console JWT from `S1_CONSOLE_API_TOKEN` works; the endpoint rejects `ApiToken ...` with HTTP 401 `"Unsupported auth type"`. Alert creation and IOCs remain console-token operations. Only raw log ingest over the event collector (`/services/collector/raw` and `/event`) moved to the SDL Log Write Key, and that is a separate path on the same host.
 - Body: concatenated JSON (one or more objects back-to-back, optionally newline-separated), gzip-compressed. `Content-Encoding: gzip` is mandatory. zstd also accepted.
-- Scope: `S1-Scope: <accountId>` or `<accountId>:<siteId>[:<groupId>]` is mandatory.
+- Scope: `S1-Scope: <accountId>` or `<accountId>:<siteId>[:<groupId>]` is mandatory on `/v1/alerts`.
 - Success shape: `202 Accepted` with `{"details":"Success","status":202}`.
 
-**Endpoints:**
+### Indicators cannot be ingested separately
 
-- `POST /v1/indicators` -- raw behavioural indicators. Each must carry `metadata.profiles = ["s1/security_indicator"]` and a unique `metadata.uid` (this is the join key). Batching: send many indicators in one call by passing a list; the client concatenates + gzips.
-- `POST /v1/alerts` -- SecurityAlert wrappers. Each references its indicator(s) via `finding_info.related_events[].uid == indicator.metadata.uid`. A single alert can reference multiple indicators (one entry per indicator). The server stitches them into `alert.rawIndicators` / the UAM Indicators tab once both land. **Call with ONE alert per POST.** The wire format accepts multi-alert bodies and the gateway returns HTTP 202, but the stitcher silently drops all but one alert in a multi-alert batch (your-tenant 2026-04-22); loop one at a time, or use `post_alert_with_indicators` which enforces the safe pattern.
+There is no usable `POST /v1/indicators`. It refuses the console user token AND the SDL Log Write
+Key, so no credential can drive it:
+
+| credential | `/v1/alerts` | `/v1/indicators` |
+|---|---|---|
+| console API token (service user), `Bearer` | 202 Success | 403 `"User token not allowed for this endpoint"` |
+| console API token (service user), `ApiToken` | 401 `Unsupported auth type` | 401 `Unsupported auth type` |
+| SDL Log Write Key, `Bearer` | 401 `UNAUTHORIZED` | 401 `UNAUTHORIZED` |
+
+The console token carries the claim `type: "user"`, and that is what `/v1/indicators` refuses. The
+Log Write Key is not the alternative: it is a Scalyr-style key for the event collector, not a
+Bearer JWT for the `/v1/*` family.
+
+**Carry every indicator inline in the alert instead.** One `POST /v1/alerts`, with the indicator
+content in `finding_info.related_events[]`. That inline copy is what populates `alert.indicators`,
+which is what the console Indicators tab renders. The old two-call flow (post indicator, sleep
+~3s, post alert referencing it by uid) is gone, along with its sleep and its ordering contract.
+
+Per `related_events[]` entry the mapping into the `Indicator` type is:
+
+| related_events field | renders as |
+|---|---|
+| `title` | `Indicator.title` |
+| `desc` | `Indicator.description` |
+| `message` | `Indicator.message` |
+| `severity_id` | `Indicator.severity`, resolved PER indicator, independent of the alert envelope severity |
+| `observables[]` | `Indicator.observables`, `type_id` mapped to the UI enum (1 HOSTNAME, 2 IP, 4 USER_NAME, 5 EMAIL, 9 PROCESS_NAME, 10 RESOURCE_UID) |
+
+Multiple `related_events` entries give multiple indicators on one alert. The minimal enriched
+entry is sufficient: inlining a whole indicator body (`device` / `actor` / `metadata.profiles`)
+into the entry and adding an OCSF `evidences[]` array alongside it were both tested and changed
+nothing.
+
+`alertWithRawIndicators.rawIndicators` was the store `/v1/indicators` fed, and the UI never read
+it. On this design it stays `[]`, which is expected and not a failure. Two teams have chased that
+empty array as if it were a bug.
+
+**The `Indicator` GraphQL type has these fields: `type`, `uid`, `title`, `description`,
+`message`, `severity`, plus the `observables` sub-selection.** There is no `name` and no
+`category`; asking for either returns
+`Validation error (FieldUndefined@[alert/indicators/name]) : Field 'name' in type 'Indicator' is undefined`
+before the query executes. (`indicator.name` and `indicator.category` DO exist, but they are SDL
+PowerQuery fields on EDR behavioural-indicator events, an unrelated schema.)
+
+**Endpoint:**
+
+- `POST /v1/alerts` -- SecurityAlert wrappers, each carrying its indicators inline in `finding_info.related_events[]`. **Call with ONE alert per POST.** The wire format accepts multi-alert bodies and the gateway returns HTTP 202, but the stitcher silently drops all but one alert in a multi-alert batch; loop one at a time.
 
 **Supported indicator classes (via builders):**
 
@@ -223,7 +268,11 @@ Everything else in this skill talks to `<tenant>.sentinelone.net/web/api/v2.1/..
 - `build_process_indicator(...)` -- OCSF class 1007 Process Activity. Observables: Hostname, Process Name, Resource UID (pid), User Name, IP Address, plus parent process.
 - `build_network_indicator(...)` -- OCSF class 4001 Network Activity. Observables: Hostname, src/dst IP Address, URL, User Name.
 
-**Python usage:**
+**Python usage.** `post_indicators()` and `post_alert_with_indicators()` were removed from
+`scripts/uam_alert_interface.py`; both drove the unreachable `/v1/indicators` endpoint, and
+tombstone comments in the module record why. Build the alert with its indicators inline and send
+it with `post_alerts([alert])`, one alert per call, as in the worked example at the end of this
+section.
 
 ```python
 import sys, time, uuid
@@ -259,40 +308,25 @@ alert = build_alert_referencing(
     title="Ingested alert", description="...",
 )
 
-# Preferred safe path. Posts the indicators, sleeps 3s (so each
-# metadata.uid registers before the stitcher resolves related_events),
-# then posts the single alert. For many alerts, LOOP this call -- do
+# One POST, indicators carried inline. No companion indicator POST, no
+# sleep, no ordering to get wrong. For many alerts, LOOP this call -- do
 # NOT pass multiple alerts to post_alerts() in one go (see constraints
 # below).
-uam_iface.post_alert_with_indicators(
-    alert, [ind_a, ind_b], scope=f"{account_id}:{site_id}")
+uam_iface.post_alerts([alert], scope=f"{account_id}:{site_id}")
 # Then poll UAM GraphQL (unified_alerts.list_alerts) to see it surface.
 ```
 
-**Validation:** after ingest, find the alert via UAM GraphQL (`unified_alerts.list_alerts` filtered by name, or `get_alert(alert_id)` once you know it). `get_alert_with_raw_indicators(c, alert_id)` returns the raw indicator dict(s) so you can confirm every `metadata.uid` and its observable names made it through.
+**Validation:** after ingest, find the alert via UAM GraphQL (`unified_alerts.list_alerts` filtered by name, or `get_alert(alert_id)` once you know it) and read `alert.indicators`. Do NOT validate with `get_alert_with_raw_indicators`: `rawIndicators` was fed by `/v1/indicators` and stays `[]` on this path.
 
 **Cleanup:** ingested alerts are not hard-deletable via public API. The standard reversibility pattern is to set `status=RESOLVED` and `analystVerdict=TRUE_POSITIVE_BENIGN` via the bulk-ops mutations in `unified_alerts` so the alert exits the active SOC queue and is tagged as synthetic.
 
-**Multi-indicator alert constraints** (empirically confirmed on
-`your-tenant` 2026-04-22):
+**Multi-indicator alert constraints** (empirically confirmed on a live tenant):
 
 - **One alert per `POST /v1/alerts` call.** The wire format accepts
   concatenated JSON for N alerts in one body and the gateway returns
   HTTP 202, but the stitcher silently drops all but one of the alerts.
   Callers with many alerts MUST loop. `post_alerts` emits a
-  `RuntimeWarning` when `len(alerts) > 1` to flag the hazard. Use
-  `post_alert_with_indicators(alert, indicators, ...)` for the safe
-  one-at-a-time path.
-- **Sleep between `POST /v1/indicators` and `POST /v1/alerts`.** If
-  the alert is posted immediately after its indicators, the stitcher
-  can resolve `finding_info.related_events[].uid` before the indicator's
-  `metadata.uid` is registered on the scope and silently drop the alert
-  (HTTP 202 still returned). A ~3s sleep between the two POSTs avoids
-  this; reducing below ~2s has been observed to regress on loaded
-  tenants. `post_alert_with_indicators` builds the sleep in; callers
-  using the low-level `post_indicators` + `post_alerts` path MUST add
-  it manually. `test_uam_alert_interface_batch.py` encodes this exact
-  sequence.
+  `RuntimeWarning` when `len(alerts) > 1` to flag the hazard.
 - Alerts with multiple `resources[]` entries (i.e. indicators spanning
   different `device.uid` values) are silently dropped by the stitcher.
   Return: HTTP 202 at the wire, NEVER surfaces in UAM. The builder
@@ -313,27 +347,59 @@ uam_iface.post_alert_with_indicators(
   `build_file_indicator()` emits the correct array shape; custom
   payload builders must follow the same convention (algorithm_id 2=MD5,
   3=SHA-256, 4=SHA-1, 5=SHA-512).
-- Multi-indicator stitching is asynchronous. Alerts surface within
-  ~30s; individual indicators appear in `alert.rawIndicators` over a
-  window of 2-120s. Tests must poll with a grace window, not assert
-  immediately.
-- **Server-side rendering quirk in `alertWithRawIndicators` GraphQL:**
-  when an alert has multiple stitched rawIndicators, the flat-key
-  representation (`observables[N].name`/`.value`/`.type_id`) has
-  shuffled VALUES on all but the last entry in the array -- keys are
-  stable, values get mixed with other fields (e.g. `observables[2].name`
-  may return `"smoke-product"` because it was populated from
-  `metadata.product.name`). Does NOT affect stitching -- `metadata.uid`
-  is correct and the UI reads from a different code path. Programmatic
-  consumers should assert on `metadata.uid` presence, not on flattened
-  `observables[N].name` fields, in batch mode.
+- Ingest is asynchronous. Alerts surface in UAM within ~30-60s of the
+  POST. Tests must poll with a grace window, not assert immediately.
 
-**Tested on `your-tenant` 2026-04-22:**
+**Single-POST worked example (the only supported path):**
 
-- `tests/test_uam_alert_interface_single.py` -- CONFIRMED WORKING end-to-end. 1 indicator + 1 alert, indicator stitches inside 30s, cleanup verified.
-- `tests/test_uam_alert_interface_batch.py` -- CONFIRMED WORKING end-to-end. 3 indicators batched into one POST, alert with 3 related_events surfaces in UAM, all 3 indicators stitch into `alert.rawIndicators` within 2-5s, cleanup verified. Per-observable name assertion treated as informational due to GraphQL server-side rendering quirk noted above.
+```python
+alert = {
+    "finding_info": {
+        "uid": alert_uid,
+        "title": "Ingest health SILENT (feed dark)",
+        "desc": "Source fell below its 7-day baseline.",
+        # This entry IS the indicator. No companion POST to /v1/indicators.
+        "related_events": [{
+            "uid": indicator_uid,          # any uuid; nothing needs to resolve it
+            "title": "Ingest volume collapsed",     # -> Indicator.title
+            "desc": "Zero live events in the window.",  # -> Indicator.description
+            "message": "Source volume 12 events vs baseline 4210",
+            "time": now_ms,
+            "severity_id": 4,              # -> Indicator.severity, per indicator
+            "class_uid": 1007, "type_uid": 100701, "category_uid": 1, "activity_id": 1,
+            "observables": [
+                {"name": "device.hostname", "type_id": 1, "type": "string",
+                 "typeName": "Hostname", "value": "host-01"},
+                {"name": "dataSource.name", "type_id": 9, "type": "string",
+                 "typeName": "Process Name", "value": "my-source"},
+            ],
+        }],
+    },
+    "resources": [{"uid": device_uid, "name": "host-01", "type_id": 1, "type": "host"}],
+    "category_uid": 2, "category_name": "Findings",
+    "class_uid": 99602001, "class_name": "S1 Security Alert",
+    "type_uid": 9960200101, "type_name": "S1 Security Alert: Create",
+    "activity_id": 1,
+    "metadata": {"version": "1.6.0-dev",
+                 "extension": {"name": "s1", "uid": "998", "version": "0.1.0"},
+                 "product": {"name": "Hyperautomation", "vendor_name": "SentinelOne"},
+                 "logged_time": now_ms, "modified_time": now_ms, "uid": alert_uid},
+    "time": now_ms, "attack_surface_ids": [1],
+    "severity_id": 4, "state_id": 1, "s1_classification_id": 1,
+}
+uam_iface.post_alerts([alert], scope=f"{account_id}:{site_id}")   # one alert per call
+```
 
-See `tests/test_uam_alert_interface_single.py` for the minimum-viable worked example, and `tests/test_uam_alert_interface_batch.py` for a batched 3-indicator / multi-observable / multi-class round-trip.
+Verify with `alert(id) { indicators { type uid title description message severity
+observables { name value type } } }`, NOT with `alertWithRawIndicators`, which stays empty on
+this path. Do not add `name` or `category` to that selection set; neither exists on `Indicator`
+and either one fails the whole query at validation.
+
+`tests/test_uam_alert_interface_single.py` and `tests/test_uam_alert_interface_batch.py` both
+drive the single POST above: one `post_alerts([alert], scope=...)` call with the indicators
+inline, plus an assertion that exactly one request went out, so a regression back to the
+indicator-then-alert sequence fails the test. The worked example on this page and those tests are
+the same shape.
 
 ### Asset linkage on ingested alerts
 
@@ -523,7 +589,7 @@ The collector creates `reports/<slug>_<window>/` on first run. The `reports/` di
 - **Natural-language hunt via Purple AI** -- Use `mcp__purple-mcp__purple_ai` (Purple MCP). The `purple_query()` Python helper and `scripts/call_purple.py` are non-functional for API tokens (`purpleLaunchQuery NATURAL_LANGUAGE` requires a browser-session teamToken, confirmed 2026-05-03). Only for SDL-telemetry questions; route entity questions to REST.
 - **Site/Group inventory**: `/sites`, `/groups`, `/accounts` are the tenant-structure endpoints; many resources require filtering by `siteIds` / `accountIds`.
 - **Bulk action audit**: `/activities` is the system-wide audit log; filter by `activityTypes` and `createdAt__gte`.
-- **Push alerts + indicators INTO UAM** -- build OCSF payloads, then call `UAMAlertInterfaceClient.post_alert_with_indicators(alert, [...])` once per alert (loop for many). The helper posts indicators, sleeps 3s, and posts the single alert in the one sequence proven to surface cleanly on US1 tenants. See "UAM Alert Interface" section above for the two silent-drop failure modes (multi-alert POST, no sleep) it prevents. Use for pipeline integrations, synthetic-alert generation, and detection testing.
+- **Push alerts INTO UAM** -- build one OCSF alert carrying its indicators inline in `finding_info.related_events[]`, then call `UAMAlertInterfaceClient.post_alerts([alert], scope=...)` once per alert (loop for many). There is no separate indicator POST: `/v1/indicators` refuses every credential. See "UAM Alert Interface" above for the required fields and the multi-alert silent-drop trap. Use for pipeline integrations, synthetic-alert generation, and detection testing.
 - **CTO report for a data source** -- `python scripts/build_source_report.py --source "<vendor>" --window <7d|24h>` then `scripts/render_charts.py`, `scripts/build_docx.py`, `scripts/build_pptx.py` on the resulting `reports/<slug>_<window>/data.json`. Works for any SDL data source; the renderer gates every section on `dims` so dimension-sparse sources (e.g. Windows Event Logs with only `event.type`) still produce a coherent deck. See "CTO report generation pipeline" for the data contract and renderer gotchas.
 
 Consult the per-tag reference files for exact parameter names, the above are orientation, not copy-paste ready.

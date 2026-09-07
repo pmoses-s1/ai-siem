@@ -1,0 +1,14 @@
+{
+  "alert_id": "1770000000000000001",
+  "verdict": "FALSE POSITIVE",
+  "confidence": "confirmed",
+  "escalate": false,
+  "basis": "MDR recorded analystVerdict FALSE_POSITIVE with a closing note of Alert Type EPP, Classification Benign, Action Resolve. That verdict takes precedence over the detection-engine severity and is not overridden without new evidence MDR did not have.",
+  "engine_severity": "CRITICAL",
+  "engine_severity_is": "a hypothesis, not a verdict",
+  "checks_in_order": [
+    "get_alert_notes",
+    "get_alert_history",
+    "then, and only then, telemetry"
+  ]
+}

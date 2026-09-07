@@ -1,0 +1,200 @@
+{
+  "skill_name": "mgmt-console-api",
+  "evals": [
+    {
+      "id": 0,
+      "name": "list-detection-rules-islegacy",
+      "prompt": "How many Custom Detection rules do we have on this tenant, and what is the split between scheduled PowerQuery rules and single-event STAR rules? Write the script you used to `scripts/list_rules.py`, dump the raw listing to `rules.json`, and give me the counts.",
+      "expected_output": "The listing call is GET /web/api/v2.1/cloud-detection/rules with `isLegacy=false` on the query string. Omitting it is not a smaller result set, it is a wrong one: the endpoint silently drops every queryType=\"scheduled\" rule with no error and no warning, so a run without it reports zero scheduled detections on a tenant that has dozens. The script classifies the returned rules by `queryType` and the reply gives a number for scheduled and a number for events.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "scripts/list_rules.py",
+          "pattern": "isLegacy[\"']?\\s*[:=]\\s*[\"']?(?:false|False)\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/list_rules.py",
+          "pattern": "/cloud-detection/rules"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/list_rules.py",
+          "pattern": "queryType"
+        },
+        {
+          "type": "json_parses",
+          "glob": "rules.json"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\d+[^\\n]{0,40}scheduled|scheduled[^\\n]{0,40}\\d+"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "uam-note-and-verdict-verified",
+      "prompt": "On alert `01HZX9K4Q7M2VN8P3RTY6WC5AB`, add the note \"Reviewed with the endpoint owner, this is the scheduled backup job\" and set the analyst verdict to FALSE_POSITIVE_USER_ERROR. Write the script to `scripts/uam_write.py`. I have been burned before by writes that looked like they landed and did not, so show me proof the alert actually changed. If a write is refused, tell me the real reason, not just whatever string the API hands back.",
+      "expected_output": "Both writes go through the UAM `alertTriggerActions` mutation at POST /web/api/v2.1/unifiedalerts/graphql, with action ids `S1/alert/addNote` and `S1/alert/analystVerdictUpdate`. The alert is targeted by the FILTER, `filter: {or: [{and: [{fieldId: \"id\", stringEqual: {value: <id>}}]}]}`, never by the action's own `id` field. `alertTriggerActions` returns a success-shaped `ActionsTriggered` even when nothing changed, so the script re-reads the alert after the mutation and the reply quotes the verdict read back as FALSE_POSITIVE_USER_ERROR. And because `failure[].errorMessage` is not a diagnosis (`Missing UAM manage permissions` is also what an action that is simply not offered for that alert type returns), the script consults `alertAvailableActions` on failure and reports not_offered / disabled / offered rather than quoting the mutation string as the cause.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "scripts/uam_write.py",
+          "pattern": "alertTriggerActions"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/uam_write.py",
+          "pattern": "S1/alert/addNote"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/uam_write.py",
+          "pattern": "S1/alert/analystVerdictUpdate"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/uam_write.py",
+          "pattern": "fieldId[\"']?\\s*[:=]\\s*[\"']id[\"']"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/uam_write.py",
+          "pattern": "stringEqual"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/uam_write.py",
+          "pattern": "(?s)alertTriggerActions.*?(?:uam_get_alert|get_alert|alert_by_id|list_alerts|alerts\\()"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "FALSE_POSITIVE_USER_ERROR"
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/uam_write.py",
+          "pattern": "alertAvailableActions|available_actions|explain_action_failure"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "threat-count-and-export-use-get",
+      "prompt": "Give me the current total threat count on the tenant and export the threat list to CSV. Record every API call you made, one per line as `METHOD path`, in `calls.txt`.",
+      "expected_output": "Reads are GET on this API, always. The count is GET /web/api/v2.1/threats?countOnly=true (or `pagination.totalItems` off a list call) and the export is GET /web/api/v2.1/threats/export. POST /web/api/v2.1/threats/summary, POST /web/api/v2.1/threats/count and POST /web/api/v2.1/export/threats are plausible-sounding paths that have never existed in the v2.1 spec; calling them returns HTTP 404, not a permissions error. The reply states the threat total as a number.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "calls.txt",
+          "pattern": "GET\\s+\\S*/web/api/v2\\.1/threats\\?[^\\n]*countOnly=true"
+        },
+        {
+          "type": "file_matches",
+          "glob": "calls.txt",
+          "pattern": "GET\\s+\\S*/web/api/v2\\.1/threats/export"
+        },
+        {
+          "type": "file_matches",
+          "glob": "calls.txt",
+          "pattern": "POST\\s+\\S*/threats/(?:summary|count)\\b",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "calls.txt",
+          "pattern": "POST\\s+\\S*/export/threats\\b",
+          "count": 0
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\d+[^\\n]{0,40}threats?|threats?[^\\n]{0,40}\\d+"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "isolate-blast-radius-first",
+      "prompt": "Network-isolate every Windows endpoint in the site \"acme demo\" that has not checked in for 30 days. Put your plan in `plan.md` before you touch anything.",
+      "expected_output": "This is a destructive bulk action with no undo, so the plan runs the matching GET with `countOnly=true` first to establish the blast radius, states the resulting endpoint count back to the user, names the exact mutating call (POST /web/api/v2.1/agents/actions/disconnect) and the filter it will carry, and stops for explicit confirmation before firing it. Site lookup uses `name__contains` because console site names contain spaces.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "countOnly=true"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "GET\\s+\\S*/web/api/v2\\.1/agents\\?"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "POST\\s+\\S*/web/api/v2\\.1/agents/actions/disconnect"
+        },
+        {
+          "type": "file_matches",
+          "glob": "plan.md",
+          "pattern": "(?i)confirm"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\d+[^\\n]{0,40}(?:endpoints?|agents?)\\b"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "create-scheduled-rule-and-verify",
+      "prompt": "Create a scheduled PowerQuery detection rule named \"Mass SMB Access Burst\" that runs hourly over a 60 minute lookback and alerts when one source host touches 25 or more distinct internal hosts on port 445. Write the creation payload to `create_rule.json` and the script to `scripts/create_rule.py`, then confirm the rule is actually there afterwards and give me its id.",
+      "expected_output": "A `scheduled` rule: `data.queryLang: \"2.0\"`, PowerQuery body in `data.scheduledParams.query` with `runIntervalMinutes: 60` and `lookbackWindowMinutes: 60`. Scheduled rules take no inline mitigation, so `treatAsThreat` is `\"UNDEFINED\"` (literal `null` is rejected with HTTP 400 \"Field may not be null\") and `networkQuarantine` is `false`. The read-back listing passes `isLegacy=false`, without which the freshly created scheduled rule does not appear and the run wrongly concludes the create failed. The reply quotes the rule id returned by the POST.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "create_rule.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "create_rule.json",
+          "path": "data.queryType",
+          "equals": "scheduled"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "create_rule.json",
+          "path": "data.queryLang",
+          "equals": "2.0"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "create_rule.json",
+          "path": "data.treatAsThreat",
+          "equals": "UNDEFINED"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "create_rule.json",
+          "path": "data.networkQuarantine",
+          "equals": false
+        },
+        {
+          "type": "file_json_path",
+          "glob": "create_rule.json",
+          "path": "data.scheduledParams.runIntervalMinutes",
+          "equals": 60
+        },
+        {
+          "type": "file_matches",
+          "glob": "scripts/create_rule.py",
+          "pattern": "isLegacy[\"']?\\s*[:=]\\s*[\"']?(?:false|False)\\b"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "\\b\\d{9,}\\b"
+        }
+      ]
+    }
+  ]
+}

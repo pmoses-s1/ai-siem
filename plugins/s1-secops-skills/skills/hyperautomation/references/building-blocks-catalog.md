@@ -923,8 +923,8 @@ Method: `POST`. Headers: `{ "Content-Type": "application/json" }`.
 
 ## B7. SDL ingest single event (HEC)
 
-Ingest goes to the **HEC collector on the regional ingest host**, bound to the SentinelOne SDL
-connection (Bearer):
+Ingest goes to the **HEC collector on the regional ingest host**, bound to a Bearer connection
+holding an **SDL Log Write Key**:
 
 ```json
 {
@@ -934,8 +934,16 @@ connection (Bearer):
 }
 ```
 
-Set `use_authentication_data: true` and bind the **SentinelOne SDL** connection; HEC requires
-`Bearer`. The four `dataSource.*` / `event.type` / `site_id` fields are not optional decoration:
+Set `use_authentication_data: true` and bind a connection whose Bearer credential is an **SDL Log
+Write Key** for the target account or site. A Hyperautomation connection sends its credential
+verbatim as `Authorization: Bearer <value>`, so this is a separate connection from the console-token
+"SentinelOne SDL" one, not the same one reused. The console token is refused here with `HTTP 400
+{"text":"Missing S1-Scope header","code":5}` where the write key returns `HTTP 200
+{"text":"Success","code":0}`, and adding an `S1-Scope` header does not fix it. Send **no**
+`S1-Scope` header: the key's scope is fixed at mint time and the collector does not read it.
+(`/v1/alerts` on the same host is the opposite case: console token plus `S1-Scope`.)
+
+The four `dataSource.*` / `event.type` / `site_id` fields are not optional decoration:
 without them the event lands with a null source, so it has no attribution, renders poorly, and is
 invisible to any `dataSource.name` filter or detection. Emit `event.type` as a FLAT dotted key,
 a nested `event: {...}` object is dropped because `event` is HEC-reserved.

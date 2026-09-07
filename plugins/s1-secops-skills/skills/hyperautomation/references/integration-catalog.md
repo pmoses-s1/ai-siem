@@ -471,6 +471,19 @@ Ad-hoc calls also seen against this integration (no `public_action_id`):
 - `POST https://ingest.us1.sentinelone.net/services/collector/event` (n=1)
 - `POST /web/api/v2.1/unifiedalerts/graphql` (n=1)
 
+This is a census of what existing flows call, not a list of what still works. Two entries are
+dead ends for new flows:
+
+- **`/v1/indicators` cannot be driven by any credential.** It refuses the console API token
+  (`403 "User token not allowed for this endpoint"`) and the SDL Log Write Key (`401`) alike.
+  Carry indicators inline in the alert, in `finding_info.related_events[]`, in a single
+  `POST /v1/alerts`, which is also what populates the console Indicators tab. `/v1/alerts` itself
+  is unchanged and still takes the console API token.
+- **`/services/collector/*` needs an SDL Log Write Key**, not the console API token: the write key
+  returns `HTTP 200 {"text":"Success","code":0}` where the console token returns
+  `HTTP 400 {"text":"Missing S1-Scope header","code":5}`. The key is minted for one account or
+  site and that fixes where the events land, so no `S1-Scope` header applies.
+
 ### Palo Alto Networks / Firewall
 
 `product_key: pa-firewall` | `integration_id` on this tenant: `63cfa20c-f77d-4404-9744-3d78cb92d7bd` | 5 packaged actions

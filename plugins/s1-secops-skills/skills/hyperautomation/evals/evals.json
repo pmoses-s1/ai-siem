@@ -1,0 +1,302 @@
+{
+  "skill_name": "hyperautomation",
+  "evals": [
+    {
+      "id": 0,
+      "name": "minimal-import-envelope-and-publish",
+      "prompt": "Give me the smallest Hyperautomation workflow that proves my token and scope work end to end: a manual trigger with no inputs, and nothing else. Save the import-ready JSON to `workflow.json`. Then list, in order, the exact API calls that take it from \"not on the console\" to \"my team can see it but it is not running\", and tell me why the second call is not optional.",
+      "expected_output": "`workflow.json` holds the import envelope: `data.name`, `data.description` and `data.actions`, with the one action object shaped `{action, export_id, connected_to, parent_action}`. `connected_to` is `[]` because nothing follows the trigger, `parent_action` is `null` because `parent_action` is loop membership only, `tag` is `core_action`, and `type` and `data.action_type` are both `manual_trigger`. `connection_id`, `connection_name` and `integration_id` are null so the JSON imports on any tenant; a hard-coded connection id from another tenant imports as 404. The reply gives the import POST with its scope param, then `POST /hyper-automate/api/v1/workflows/{workflow_id}/publish` (bodyless, 204), and explains that an API import lands as a Private Draft owned by the token's user, so it is invisible to everyone else until it is published to a Shared Draft. Activation is not part of this, the ask stops at shared-but-not-running.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "workflow.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "workflow.json",
+          "path": "data.name",
+          "exists": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "workflow.json",
+          "path": "data.actions.0.export_id",
+          "equals": 0
+        },
+        {
+          "type": "file_json_path",
+          "glob": "workflow.json",
+          "path": "data.actions.0.parent_action",
+          "equals": null
+        },
+        {
+          "type": "file_json_path",
+          "glob": "workflow.json",
+          "path": "data.actions.0.action.type",
+          "equals": "manual_trigger"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "workflow.json",
+          "path": "data.actions.0.action.tag",
+          "equals": "core_action"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "workflow.json",
+          "path": "data.actions.0.action.data.action_type",
+          "equals": "manual_trigger"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "workflow.json",
+          "path": "data.actions.0.action.connection_id",
+          "equals": null
+        },
+        {
+          "type": "file_matches",
+          "glob": "workflow.json",
+          "pattern": "\"connected_to\"\\s*:\\s*\\[\\s*\\]"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "/publish"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)private draft"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)shared draft"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "parent-action-is-loop-membership",
+      "prompt": "My import keeps failing with `422 \"Invalid workflow data\"` and every field looks right. The workflow is three top-level actions: a Singularity Response Trigger, then an HTTP Request, then a Send Email. I set each action's `parent_action` to the `export_id` of the action before it so the platform knows the running order. Write the corrected `actions` array to `actions.json` and tell me what `parent_action` is actually for.",
+      "expected_output": "`parent_action` expresses loop membership and nothing else. Pointing it at a previous non-loop node's `export_id` to imply order is the top cause of a 422 on an otherwise correct workflow, which is why every field looks right. All three nodes get `parent_action: null`, and the running order comes strictly from `connected_to[].target`: trigger to HTTP, HTTP to email, with the email node's `connected_to` empty because it is terminal. `export_id` values need only be unique integers; they are not required to be sequential or positional.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "actions.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "actions.json",
+          "pattern": "\"parent_action\"\\s*:\\s*null",
+          "count": 3
+        },
+        {
+          "type": "file_matches",
+          "glob": "actions.json",
+          "pattern": "\"parent_action\"\\s*:\\s*\\d",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "actions.json",
+          "pattern": "\"target\"\\s*:\\s*\\d",
+          "count": 2
+        },
+        {
+          "type": "file_json_path",
+          "glob": "actions.json",
+          "path": "0.connected_to.0.target",
+          "exists": true
+        },
+        {
+          "type": "file_json_path",
+          "glob": "actions.json",
+          "path": "0.action.type",
+          "equals": "singularity_response_trigger"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)parent_action"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)\\bloop\\b"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)connected_to"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "sdl-lrq-launch-poll-connection",
+      "prompt": "Build the actions that run an SDL PowerQuery from a workflow: the launch, the loop that polls it to completion, and the done-check. Save the actions array to `lrq_actions.json`. We already have a flow doing this and every run comes back HTTP 500. Tell me why and which connection these actions have to bind instead.",
+      "expected_output": "The 500 is `Header must start with Bearer`: the flow is bound to the mgmt \"SentinelOne\" connection, which signs `Authorization: ApiToken`, and the SDL query endpoints require `Bearer`. Bind the \"SentinelOne SDL\" connection instead and set `use_authentication_data: true` on both HTTP actions. The launch POSTs `{{Connection.protocol}}{{Connection.url}}/sdl/v2/api/queries` with `queryType: \"PQ\"` and the query under `pq.query`, and captures both `body.id` and the `X-Dataset-Query-Forward-Tag` response header, which is mandatory and echoed on every GET. The poll GET runs inside the loop, and both step counters are read through `Function.JQ` with defaults, because a bare `{{poll.body.stepsTotal}}` errors the whole run when a response omits the attribute. The done-check compares `stepsCompleted` to `stepsTotal` and is gated on `stepsTotal` greater than 0, so a 0/0 first poll is not mistaken for a finished query. Every action that reads a poll result lives inside the loop, since loop-scoped outputs do not resolve outside it.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "lrq_actions.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "/sdl/v2/api/queries"
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "(?i)X-Dataset-Query-Forward-Tag"
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "\"use_authentication_data\"\\s*:\\s*true"
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "stepsCompleted"
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "stepsTotal"
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "Function\\.JQ"
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "\"type\"\\s*:\\s*\"loop\""
+        },
+        {
+          "type": "file_matches",
+          "glob": "lrq_actions.json",
+          "pattern": "/api/powerQuery",
+          "count": 0
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)header must start with bearer"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)ApiToken"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "SentinelOne SDL"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "hec-collector-needs-its-own-connection",
+      "prompt": "Add one action to that same workflow that ships a batch of OCSF events into AI SIEM through the HEC event collector. Since it is in the same flow as the SDL query actions, tell me plainly whether it can reuse that connection. Save the action object to `hec_action.json` and the connection-creation request body to `connection.json`, with a placeholder where the secret goes and never a real key.",
+      "expected_output": "It cannot reuse the SDL connection. `POST {HEC_INGEST_URL}/services/collector/event` takes an SDL Log Write Key, not the console API token: measured live, the write key returns HTTP 200 and the console token returns HTTP 400 `{\"text\":\"Missing S1-Scope header\",\"code\":5}`, and adding an `S1-Scope` header does not fix it. So a second Bearer connection is created whose `api_key` is the Log Write Key, and the collector action sends no `S1-Scope` header, because the key is minted for one account or site and that alone fixes where the events land. The event payload carries `dataSource.name`, `dataSource.vendor` and `dataSource.category` set to `security`, plus `site_id` and a FLAT dotted `\"event.type\"` key, since a nested `event: {...}` object is dropped on ingest (`event` is HEC-reserved). The key value in `connection.json` is a placeholder.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "hec_action.json"
+        },
+        {
+          "type": "json_parses",
+          "glob": "connection.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "hec_action.json",
+          "pattern": "/services/collector/"
+        },
+        {
+          "type": "file_matches",
+          "glob": "hec_action.json",
+          "pattern": "dataSource\\.category\\\\?\"\\s*:\\s*\\\\?\"security"
+        },
+        {
+          "type": "file_matches",
+          "glob": "hec_action.json",
+          "pattern": "\"event\\.type\\\\?\"\\s*:"
+        },
+        {
+          "type": "file_matches",
+          "glob": "hec_action.json",
+          "pattern": "(?i)S1-Scope",
+          "count": 0
+        },
+        {
+          "type": "file_json_path",
+          "glob": "connection.json",
+          "path": "data.authentication_data.way_to_pass_prefix",
+          "equals": "Bearer"
+        },
+        {
+          "type": "file_matches",
+          "glob": "connection.json",
+          "pattern": "(?i)log[ _-]?write[ _-]?key"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)Missing S1-Scope header"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)log write key"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "fail-closed-approval-gate",
+      "prompt": "Write the approval gate for our auto-isolate workflow: an analyst approves in Slack, then the endpoint is isolated. Save the condition action and the isolate action to `gate.json`. Our current version isolates hosts when nobody answers at all, and I want to know exactly why before I ship the replacement.",
+      "expected_output": "The current gate is fail-open. It tests `not_equals \"dismissed\"`, and on a Slack or interaction timeout the value resolves to empty; empty is not equal to \"dismissed\", so the isolate runs with nobody having approved anything. The replacement fails closed: it tests `equals \"approved\"` and the isolate action hangs off the `\"true\"` branch only (`custom_handle: \"true\"`), so a timeout takes the false branch and nothing destructive happens. `condition_type` is `\"multi\"` with a flat `conditions` array and `condition: null`; `\"simple\"` does not appear in the active corpus.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "gate.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "gate.json",
+          "pattern": "\"comparison_operator\"\\s*:\\s*\"equals\""
+        },
+        {
+          "type": "file_matches",
+          "glob": "gate.json",
+          "pattern": "\"not_equals\"",
+          "count": 0
+        },
+        {
+          "type": "file_matches",
+          "glob": "gate.json",
+          "pattern": "\"condition_type\"\\s*:\\s*\"multi\""
+        },
+        {
+          "type": "file_matches",
+          "glob": "gate.json",
+          "pattern": "\"condition\"\\s*:\\s*null"
+        },
+        {
+          "type": "file_matches",
+          "glob": "gate.json",
+          "pattern": "\"compared_value\"\\s*:\\s*\"approved\""
+        },
+        {
+          "type": "file_matches",
+          "glob": "gate.json",
+          "pattern": "\"custom_handle\"\\s*:\\s*\"true\""
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)fails?[ -]?closed"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)time[ -]?out"
+        }
+      ]
+    }
+  ]
+}

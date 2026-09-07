@@ -60,7 +60,6 @@ const TOOL_SKILL = {
   ha_export_workflow:            'hyperautomation',
   // UAM Ingest
   uam_ingest_alert:              'mgmt-console-api (UAM Alert Interface)',
-  uam_post_indicators:           'mgmt-console-api (UAM Alert Interface)',
   uam_post_alert:                'mgmt-console-api (UAM Alert Interface)',
 };
 

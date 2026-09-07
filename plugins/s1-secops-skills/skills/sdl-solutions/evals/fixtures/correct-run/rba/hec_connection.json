@@ -1,0 +1,17 @@
+{
+  "data": {
+    "name": "SDL Event Collector (RBA risk index)",
+    "url": "<hec-ingest-host>",
+    "port": 443,
+    "protocol": "https://",
+    "integration_id": "<action-pack id for the event collector integration>",
+    "is_default": false,
+    "authentication_data": {
+      "way_to_pass": "header",
+      "way_to_pass_input": "Authorization",
+      "way_to_pass_prefix": "Bearer",
+      "authentication_type": "api_key",
+      "api_key": "<PLACEHOLDER: SDL Log Write Key minted for the target account, operator supplies, never committed>"
+    }
+  }
+}

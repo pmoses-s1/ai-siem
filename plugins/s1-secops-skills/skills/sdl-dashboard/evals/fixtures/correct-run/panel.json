@@ -1,0 +1,12 @@
+{
+  "title": "Alert volume by severity",
+  "graphStyle": "stacked_bar",
+  "xAxis": "time",
+  "query": "dataSource.name='alert' severity_id = * | group hits=count() by timestamp=timebucket('1h'), sev=severity_id | transpose sev on timestamp",
+  "layout": {
+    "x": 0,
+    "y": 0,
+    "w": 60,
+    "h": 16
+  }
+}

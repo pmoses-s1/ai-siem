@@ -48,6 +48,23 @@ time.
 4. **Hunt the behaviour families.** Independently of existing rules: perimeter scanning / brute
    force; auth failures, spray, lockouts; Kerberos abuse; discovery / enumeration; persistence;
    credential dumping. Coverage of where you look matters more than cleverness.
+
+   Each family maps to a technique, and the mapping is what step 9 reports. Use the sub-technique
+   when the evidence names the mechanism, and the parent when it does not:
+
+   | behaviour family | ATT&CK technique |
+   |---|---|
+   | Perimeter / internal scanning | T1046 Network Service Discovery |
+   | Auth failures, spray, lockouts | T1110 Brute Force (T1110.003 Password Spraying) |
+   | Kerberos abuse | T1558 Steal or Forge Kerberos Tickets (T1558.003 Kerberoasting) |
+   | Discovery / enumeration | T1087 Account Discovery, T1018 Remote System Discovery |
+   | Persistence | T1053.005 Scheduled Task, T1547.001 Registry Run Keys, T1112 Modify Registry |
+   | Credential dumping | **T1003 OS Credential Dumping (T1003.001 LSASS Memory)** |
+   | Malicious code and commands (step 5) | T1059 Command and Scripting Interpreter (T1059.001 PowerShell) |
+   | Lateral movement over SMB / WinRM | T1021.002 SMB/Windows Admin Shares, T1021.006 WinRM |
+
+   Valid-account abuse (T1078) rides alongside most of these rather than replacing them: say which
+   technique the evidence shows, not which one the alert name suggests.
 5. **Hunt malicious code and commands across EVERY telemetry layer.** The most-missed step. A
    malicious command will not always sit where you first look:
    - Process command lines (Sysmon ProcessCreate / 4688 / Linux exec): encoded/obfuscated

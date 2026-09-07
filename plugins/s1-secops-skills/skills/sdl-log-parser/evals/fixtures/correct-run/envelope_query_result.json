@@ -1,0 +1,18 @@
+{
+  "query": "parser='acme_auth_envelope' | columns user, action, result, meta.ip, meta.country, meta.mfa | sort -ts_raw | limit 10",
+  "columns": [
+    {"name": "user"},
+    {"name": "action"},
+    {"name": "result"},
+    {"name": "meta.ip"},
+    {"name": "meta.country"},
+    {"name": "meta.mfa"}
+  ],
+  "values": [
+    ["bob", "logout", "success", "10.0.0.5", "US", true],
+    ["alice", "login", "failed", "10.0.0.99", "RU", false],
+    ["carol", "login", "success", "10.0.0.5", "US", true]
+  ],
+  "row_count": 3,
+  "matchCount": 3
+}

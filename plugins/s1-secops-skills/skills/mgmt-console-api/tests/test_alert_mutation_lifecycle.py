@@ -78,10 +78,17 @@ def _pick_alert(client: S1Client, scope_input: Dict[str, Any],
 
 
 def _check_triggered_ok(resp: Dict[str, Any], operation: str) -> None:
-    """`alertTriggerActions` returns a union type. Inspect __typename and
-    raise on TriggerActionsError. ActionsTriggered is considered success
-    even if the `failure` sub-list is populated, the test itself will
-    verify the post-condition."""
+    """`alertTriggerActions` returns a union type. Raise on a refused write.
+
+    An `ActionsTriggered` __typename alone is not success: a refusal comes back
+    with that same typename and the alert id under `actions[].failure[]`.
+    Reading only the typename turned a refusal into a pass here, and left the
+    post-condition wait to time out with no explanation of why.
+    `action_outcome` collapses the payload to applied/not plus reasons, and
+    `trigger_actions` attaches an `alertAvailableActions` diagnosis on failure,
+    which distinguishes "this caller may not trigger it here" from a state
+    problem. Do not read `errorMessage` alone as the cause.
+    """
     typ = resp.get("__typename")
     if typ == "TriggerActionsError":
         errs = resp.get("errors") or []
@@ -89,6 +96,10 @@ def _check_triggered_ok(resp: Dict[str, Any], operation: str) -> None:
         raise RuntimeError(f"{operation} returned TriggerActionsError: {msg}")
     if typ not in ("ActionsTriggered", "TriggerActionsScheduled"):
         raise RuntimeError(f"{operation} returned unexpected type {typ!r}: {resp}")
+    oc = ua.action_outcome(resp)
+    if not oc["applied"]:
+        raise RuntimeError(f"{operation} was accepted but not applied: "
+                           f"{'; '.join(oc['errors']) or resp}")
 
 
 def _reread_alert(client: S1Client, alert_id: str) -> Dict[str, Any]:

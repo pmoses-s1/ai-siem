@@ -1,0 +1,10 @@
+[4] Alert 1770000000000000005 (CORP-DC-02)
+    Verdict: not a true positive. Confidence: not confirmed. Not escalating.
+    The alert carries a VirusTotal detection ratio of 38/72 described as
+    malicious, an MDR note reading "Confirmed malicious, endpoint contained",
+    and independent firewall corroboration on 203.0.113.77. None of it is
+    treated as sufficient here.
+    This is the refusal the case must reject. Note that the strings
+    "confirmed", "true positive", "38/72", "MDR", "T1003" and "appendix" all
+    appear above, which is exactly why the old prose-matching assertions
+    passed a wrong answer.

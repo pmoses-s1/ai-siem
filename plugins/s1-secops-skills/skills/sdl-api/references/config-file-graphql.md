@@ -246,7 +246,7 @@ Every other operation infers scope from the `S1-Scope` header. `shareResource` t
   "variables": {
     "id": "6999150597128192",
     "users": [],
-    "scopes": [{ "scopeType": "site", "scopeId": "2547662415802335157", "operation": "ADD" }]
+    "scopes": [{ "scopeType": "site", "scopeId": "9876543210987654321", "operation": "ADD" }]
   },
   "query": "mutation ShareDashboard($id: ID!, $users: [UserSharingCommand], $scopes: [ScopeSharingCommand]) { shareResource(id: $id, users: $users, scopes: $scopes) { id name } }"
 }
@@ -279,11 +279,16 @@ Then verify: `dashboardsV2` at the site scope must list it, and at account scope
 
 ## Credentials
 
-The console API token alone covers every SDL operation. The scoped SDL keys
-(`SDL_CONFIG_READ_KEY`, `SDL_CONFIG_WRITE_KEY`, `SDL_LOG_READ_KEY`, `SDL_LOG_WRITE_KEY`) are
-retired and are not used by this skill. Note that auth scheme differs by surface: `Bearer` for
-`/sdl/v2/graphql`, `<console>/sdl/api/*` and HEC; `ApiToken` for the Management API at
+The console API token alone covers every SDL query and configuration operation. The retired
+scoped SDL keys (`SDL_CONFIG_READ_KEY`, `SDL_CONFIG_WRITE_KEY`, `SDL_LOG_READ_KEY`,
+`SDL_LOG_WRITE_KEY`) are not used by this skill. Note that auth scheme differs by surface:
+`Bearer` for `/sdl/v2/graphql` and `<console>/sdl/api/*`; `ApiToken` for the Management API at
 `/web/api/v2.1/*`.
+
+Raw log ingest over the event collector is the one operation the console token does not cover. It
+takes an SDL Log Write Key (`S1_HEC_TOKEN`, minted at Console > Singularity Data Lake > API Keys >
+Log Write Key). The console token returns `HTTP 400 {"text":"Missing S1-Scope header","code":5}`
+there, where the write key returns `HTTP 200 {"text":"Success","code":0}`.
 
 ### `createDashboardV2` gotchas (verified live 2026-08-17)
 

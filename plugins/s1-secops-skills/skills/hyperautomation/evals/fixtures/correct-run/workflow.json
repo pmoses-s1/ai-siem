@@ -1,0 +1,43 @@
+{
+  "data": {
+    "name": "minimal-smoke-test",
+    "description": "validates the import path",
+    "actions": [
+      {
+        "action": {
+          "type": "manual_trigger",
+          "tag": "core_action",
+          "connection_id": null,
+          "connection_name": null,
+          "use_connection_name": false,
+          "integration_id": null,
+          "data": {
+            "name": "Manual Trigger",
+            "action_type": "manual_trigger",
+            "dynamic_properties": {},
+            "static_payload": "{}",
+            "trigger_type": "dynamic"
+          },
+          "state": "active",
+          "description": null,
+          "client_data": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "dimensions": {
+              "width": 256.0,
+              "height": 100.0
+            },
+            "collapsed": false
+          },
+          "snippet_workflow_id": null,
+          "snippet_version_id": null
+        },
+        "export_id": 0,
+        "connected_to": [],
+        "parent_action": null
+      }
+    ]
+  }
+}

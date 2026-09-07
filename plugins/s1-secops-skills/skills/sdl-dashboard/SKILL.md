@@ -98,7 +98,7 @@ Do not infer the exception from convenience. If the deployment scope is a site a
 
 | Filter | Events matched |
 |---|---|
-| `site.id='2547662415802335157'` | 60,410 |
+| `site.id='9876543210987654321'` | 60,410 |
 | of those, rows where `site.name` is null | **510** |
 
 Breakdown of the 510 that a `site.name` filter would silently drop: `ActivityFeed` 172, `asset` 111, unattributed source 99, `SentinelOne` 70, `Windows Event Logs` 48, **`alert` 10**.
@@ -116,10 +116,10 @@ So `site.name` drops alert and asset records, which is exactly what a SOC dashbo
 
 ```bash
 # Site-deployed dashboard: every query panel must carry site.id='<siteId>'
-python3 scripts/panel_safety_check.py dash.json --site-id 2547662415802335157
+python3 scripts/panel_safety_check.py dash.json --site-id 9876543210987654321
 
 # Deliberate account-wide queries on a site-deployed dashboard
-python3 scripts/panel_safety_check.py dash.json --site-id 2547662415802335157 \
+python3 scripts/panel_safety_check.py dash.json --site-id 9876543210987654321 \
     --allow-account-scope-queries
 ```
 

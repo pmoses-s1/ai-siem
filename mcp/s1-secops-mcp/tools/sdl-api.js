@@ -49,7 +49,7 @@ const SCOPE_NOTE =
 /** Shared scope property for every tool schema. */
 const scopeProp = {
   type: 'string',
-  description: `Optional S1-Scope, e.g. "2046190533732727925:2547662415802335157". ${SCOPE_NOTE}`,
+  description: `Optional S1-Scope, e.g. "1234567890123456789:9876543210987654321". ${SCOPE_NOTE}`,
 };
 
 export const tools = [
@@ -241,7 +241,7 @@ export const tools = [
         id: { type: 'string', description: 'Dashboard id from sdl_list_dashboards or sdl_create_dashboard.' },
         scopes: {
           type: 'array',
-          description: 'Share targets. Each entry is {scopeType, scopeId, operation}: scopeType is "site" | "account" | "global"; scopeId is the numeric id from GET /web/api/v2.1/sites or /accounts (not required for global); operation is "ADD" or "REMOVE" (default ADD). Example: [{"scopeType":"site","scopeId":"2547662415802335157","operation":"ADD"}].',
+          description: 'Share targets. Each entry is {scopeType, scopeId, operation}: scopeType is "site" | "account" | "global"; scopeId is the numeric id from GET /web/api/v2.1/sites or /accounts (not required for global); operation is "ADD" or "REMOVE" (default ADD). Example: [{"scopeType":"site","scopeId":"9876543210987654321","operation":"ADD"}].',
           items: {
             type: 'object',
             properties: {
@@ -307,19 +307,22 @@ export const tools = [
   // ─── hec_ingest ─────────────────────────────────────────────────────────────
   {
     name: 'hec_ingest',
-    description: `Ingest raw logs/events into the SentinelOne AI SIEM Singularity Data Lake via the HEC (HTTP Event Collector) endpoint. Applies a named parser via ?sourcetype and lands the data in the Data Lake for Event Search, PowerQuery, and detection rules. Replaces the removed sdl_upload_logs. NOT UAM ingest (the uam_* tools post OCSF indicators/alerts to /v1/* on the same host but a separate API). Per S-26.1 HEC docs: POST {S1_HEC_INGEST_URL}/services/collector/raw, Authorization: Bearer <S1_CONSOLE_API_TOKEN>, query params become fields, gzip recommended, 10 MB uncompressed per request.`,
+    description: `Ingest raw logs/events into the SentinelOne AI SIEM Singularity Data Lake via the HEC (HTTP Event Collector) endpoint. Applies a named parser via ?sourcetype and lands the data in the Data Lake for Event Search, PowerQuery, and detection rules. Replaces the removed sdl_upload_logs. NOT UAM ingest (the uam_* tools post OCSF indicators/alerts to /v1/* on the same host but a separate API). POST {S1_HEC_INGEST_URL}/services/collector/raw with Authorization: Bearer <S1_HEC_TOKEN>, an SDL Log Write Key. NOT the Management Console API token: the collector refuses it. Measured on a live tenant, identical request: write key returns 200 {"text":"Success","code":0}, console token returns 400 {"text":"Missing S1-Scope header","code":5}. Mint the key at Console > Singularity Data Lake > API Keys > Log Write Key; no API creates one. The key is issued for one account or site and writes only there, so it fixes the destination and NO S1-Scope header is sent. Query params become fields, gzip recommended, 10 MB uncompressed per request.`,
     inputSchema: {
       type: 'object',
       properties: {
         logContent: { type: 'string', description: 'Raw log text. For the /raw endpoint, newline-separated lines become separate events.' },
         parser: { type: 'string', description: 'Parser name, sent as the ?sourcetype= query param. Omit to skip parsing (structured JSON on /event auto-parses).' },
         fields: { type: 'object', description: 'Extra key-value pairs sent as query params; each key becomes a field in the UI, e.g. {"server":"dev","region":"ap1"}. Avoid HEC-reserved names (event, time, host, source, sourcetype, index, fields) as keys; use the parser arg to set sourcetype.' },
-        scope: { type: 'string', description: 'REQUIRED. accountId or "accountId:siteId" sent as the S1-Scope header; HEC rejects requests without it (400 "Missing S1-Scope header").' },
+        scope: { type: 'string', description: 'IGNORED, accepted only so older callers do not break. The Log Write Key already fixes the destination and no S1-Scope header is sent, so passing this has no effect. To write to a different account or site, use a key minted for that scope.' },
         endpoint: { type: 'string', enum: ['raw','event'], description: "HEC endpoint: 'raw' (default, raw text) or 'event' (structured JSON)." },
         compress: { type: 'boolean', description: 'gzip the body (Content-Encoding: gzip). Default true.' },
         isParsed: { type: 'boolean', description: 'For /event with structured JSON: set ?isParsed=true so SDL indexes the JSON fields directly, with no SDL parser. Confirmed working.' },
       },
-      required: ['logContent', 'scope'],
+      // `scope` is NOT required any more. Leaving it in `required` made the schema
+      // demand an argument the implementation discards, so a correct call looked
+      // invalid and an invalid one looked correct.
+      required: ['logContent'],
     },
     async handler({ logContent, parser, fields, scope, endpoint, compress, isParsed }) {
       const result = await hecIngest(logContent, { parser, fields, scope, endpoint, compress, isParsed });

@@ -10,7 +10,7 @@ description: "Deploy packaged, repeatable SentinelOne Singularity Data Lake (SDL
 > REST `listFiles` / `getFile` **cannot see** udoId-addressed `/dashboards/` files, so `getFile`
 > returns `404` on a dashboard the console is displaying and the listing under-reports (measured on
 > one tenant: REST 8, GraphQL 17, console 48 files). **If a listing disagrees with what the UI
-> shows, the listing is wrong until proven otherwise** — change read path before concluding the
+> shows, the listing is wrong until proven otherwise**, change read path before concluding the
 > object is missing or the token lacks scope. Use the GraphQL `configFiles` / `configFile` surface.
 > A name-addressed `addConfigFile` to `/dashboards/` **creates a duplicate** instead of updating;
 > address dashboards by `udoId` with `expectedVersion`. `content` is HJSON, not JSON. `S1-Scope`
@@ -62,7 +62,7 @@ Keep prompts simple and few. Prefer defaults the user can accept with one word o
 This skill orchestrates the SentinelOne primitive skills. Load the ones a playbook calls for:
 
 - `powerquery` for `datasource` + `savelookup` queries and the LRQ runner. The `references/datasource-command.md` there is the source of truth for the assets datasource.
-- `sdl-api` (or the `s1-secops-mcp` tools `sdl_put_file`, `sdl_get_file`, `hec_ingest`) to deploy config files and ingest test data.
+- `sdl-api` (or the `s1-secops-mcp` tools `sdl_put_file`, `sdl_get_file`, `hec_ingest`) to deploy config files and ingest test data. Config-file writes use the console API token; `hec_ingest` needs an SDL Log Write Key in `S1_HEC_TOKEN` instead, and because that key is minted for one account or site it also fixes where test data lands, which no scope argument overrides.
 - `sdl-log-parser` for parser authoring and the computeFields lookup pattern.
 - `hyperautomation` for the scheduled refresh workflow.
 - `mgmt-console-api` (or `s1-secops-mcp` `s1_api_*`) for site lookup and scoped workflow import / activate / deactivate.

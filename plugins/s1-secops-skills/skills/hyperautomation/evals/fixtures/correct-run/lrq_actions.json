@@ -1,0 +1,311 @@
+[
+  {
+    "action": {
+      "type": "http_request",
+      "tag": "integration",
+      "connection_id": null,
+      "connection_name": "",
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Launch SDL Query",
+        "action_type": "http_request",
+        "method": "POST",
+        "url": "{{Connection.protocol}}{{Connection.url}}/sdl/v2/api/queries",
+        "use_authentication_data": true,
+        "public_action_id": null,
+        "payload": "{\"queryType\": \"PQ\", \"tenant\": true, \"queryPriority\": \"HIGH\", \"pq\": {\"query\": \"dataSource.name='alert' | group n=count() | limit 1\", \"resultType\": \"TABLE\"}}"
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 0.0,
+          "y": 0.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 20,
+    "connected_to": [
+      {
+        "target": 19,
+        "custom_handle": null
+      }
+    ],
+    "parent_action": null
+  },
+  {
+    "action": {
+      "type": "variable",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Capture Forward Tag",
+        "action_type": "variable",
+        "variables": [
+          {
+            "name": "forward_tag",
+            "value": "{{Function.JQ(launch-sdl-query.headers, \"to_entries | map(select(.key|ascii_downcase==\\\"x-dataset-query-forward-tag\\\")) | .[0].value\", true)}}",
+            "is_secret": false
+          }
+        ],
+        "variables_scope": "local",
+        "expire_in": null,
+        "expire_unit": null,
+        "global_var_name": null,
+        "global_var_value": null
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 0.0,
+          "y": 190.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 19,
+    "connected_to": [
+      {
+        "target": 18,
+        "custom_handle": null
+      }
+    ],
+    "parent_action": null
+  },
+  {
+    "action": {
+      "type": "loop",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Poll Until Done",
+        "action_type": "loop",
+        "loop_type": "while",
+        "object_to_iterate": null,
+        "max_iterations": 60
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 0.0,
+          "y": 380.0
+        },
+        "dimensions": {
+          "width": 620.0,
+          "height": 720.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 18,
+    "connected_to": [
+      {
+        "target": 17,
+        "custom_handle": "inner"
+      }
+    ],
+    "parent_action": null
+  },
+  {
+    "action": {
+      "type": "http_request",
+      "tag": "integration",
+      "connection_id": null,
+      "connection_name": "",
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Poll SDL Query",
+        "action_type": "http_request",
+        "method": "GET",
+        "url": "{{Connection.protocol}}{{Connection.url}}/sdl/v2/api/queries/{{local_var.query_id}}?lastStepSeen=0",
+        "use_authentication_data": true,
+        "public_action_id": null,
+        "headers": [
+          {
+            "key": "X-Dataset-Query-Forward-Tag",
+            "value": "{{local_var.forward_tag}}"
+          }
+        ]
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 210.0,
+          "y": 60.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 17,
+    "connected_to": [
+      {
+        "target": 16,
+        "custom_handle": null
+      }
+    ],
+    "parent_action": 18
+  },
+  {
+    "action": {
+      "type": "condition",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Query Killed By Backend",
+        "action_type": "condition",
+        "condition_type": "multi",
+        "condition": null,
+        "conditions": [
+          {
+            "input_value": "{{poll-sdl-query.status_code}}",
+            "compared_value": "400",
+            "comparison_operator": "greater_than_or_equals"
+          }
+        ],
+        "conditions_relationship": "and"
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 210.0,
+          "y": 240.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 16,
+    "connected_to": [
+      {
+        "target": 15,
+        "custom_handle": "false"
+      }
+    ],
+    "parent_action": 18
+  },
+  {
+    "action": {
+      "type": "condition",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Query Complete",
+        "action_type": "condition",
+        "condition_type": "multi",
+        "condition": null,
+        "conditions": [
+          {
+            "input_value": "{{Function.JQ(poll-sdl-query.body, \"(.stepsCompleted // -1)\", true)}}",
+            "compared_value": "{{Function.JQ(poll-sdl-query.body, \"(.stepsTotal // 0)\", true)}}",
+            "comparison_operator": "equals"
+          },
+          {
+            "input_value": "{{Function.JQ(poll-sdl-query.body, \"(.stepsTotal // 0)\", true)}}",
+            "compared_value": "0",
+            "comparison_operator": "greater_than"
+          }
+        ],
+        "conditions_relationship": "and"
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 210.0,
+          "y": 420.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 15,
+    "connected_to": [
+      {
+        "target": 14,
+        "custom_handle": "true"
+      }
+    ],
+    "parent_action": 18
+  },
+  {
+    "action": {
+      "type": "break_loop",
+      "tag": "core_action",
+      "connection_id": null,
+      "connection_name": null,
+      "use_connection_name": false,
+      "integration_id": null,
+      "data": {
+        "name": "Break",
+        "action_type": "break_loop"
+      },
+      "state": "active",
+      "description": null,
+      "client_data": {
+        "position": {
+          "x": 210.0,
+          "y": 600.0
+        },
+        "dimensions": {
+          "width": 256.0,
+          "height": 76.0
+        },
+        "collapsed": false
+      },
+      "snippet_workflow_id": null,
+      "snippet_version_id": null
+    },
+    "export_id": 14,
+    "connected_to": [],
+    "parent_action": 18
+  }
+]

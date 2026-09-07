@@ -1,0 +1,48 @@
+=== sdl-solutions: correct-run transcript (fixture) ===
+
+[0] Onboarding acme_edge, Step 0 eligibility gate
+    parser attribute: ABSENT. message attribute: PRESENT.
+    The SDL parser only ever sees `message` and `parser`, so with no `parser`
+    attribute it cannot select a parser at all. No SDL parser is authored for
+    this source. Fix it in Data Pipeline Management by stamping a `parser`
+    attribute on the event, then re-run the gate and continue to Step 1.
+    Probes saved: onboarding/probes/parser_present.pq, onboarding/probes/parser_absent.pq
+
+[1] Onboarding detection
+    scheduled rule, queryLang 2.0, treatAsThreat UNDEFINED, networkQuarantine false.
+    entityMappings: device_agentid, src_ip, dst_ip (3 is the API cap; a 4th is
+    rejected 400 Longer than maximum length 3). device_agentid is what stops the
+    "Unknown Device" binding. renotifyMinutes 60, not 1440.
+    Scope is accountIds: the body reads a lookup table, which is account-level.
+    List them back with: GET /web/api/v2.1/cloud-detection/rules?isLegacy=false
+    Without isLegacy=false every scheduled rule is silently omitted.
+
+[2] Ingest health
+    Scope lives in /datatables/ingestHealthExclusions.csv, not in the query text.
+    Deployed FIRST: a `lookup ... from ingestHealthExclusions.csv` against a table
+    that does not exist errors "file not found" and takes the whole rule down.
+    A `dataSource.vendor != 'SentinelOne'` filter KEEPS every null-vendor row, so
+    alert, indicator, asset, ActivityFeed, misconfiguration, finding and risk all
+    leak straight back in; they are listed by NAME in the CSV instead.
+    Zscaler is a vendor-match row, deleted when it comes back.
+
+[3] Akamai exclusion rule type: SCHEDULED
+    Long list, edited weekly, and you want to see what it suppresses.
+    single-event and correlation bodies are boolean S1QL with NO pipes: the list
+    can only be hardcoded inline in the rule body, and with no pipes there is no
+    anti-join, so no effectiveness dashboard is possible for either.
+    Scheduled keeps the list in a CSV lookup and the dashboard counts the exact
+    inverse over the same window: | filter excl_asset = * (excluded + kept = total).
+
+[4] RBA collector
+    Two credentials, therefore two connections.
+    Run Contributors -> /sdl/api/powerQuery keeps "SentinelOne SDL" (console JWT).
+    Publish Risk Events -> /services/collector/event needs an SDL Log Write Key.
+    Your HTTP 400 {"text":"Missing S1-Scope header","code":5} is the wrong
+    credential, not a missing header, which is why adding the header changed
+    nothing. That action sends no S1-Scope header at all; the write key's scope
+    is fixed when it is minted.
+    Sequence: import -> POST /hyper-automate/api/v1/workflows/{id}/publish in the
+    SAME step (Private Draft is invisible to you until it is a Shared Draft) ->
+    you bind both connections in the console -> activate -> run-now and confirm
+    fresh events query back out of dataSource.name='risk'.

@@ -1,0 +1,20 @@
+{
+  "query": "parser='acme_firewall_cef' | columns src, dst, spt, dpt, proto, act, signature_id, severity_id | sort -ts_raw | limit 10",
+  "columns": [
+    {"name": "src"},
+    {"name": "dst"},
+    {"name": "spt"},
+    {"name": "dpt"},
+    {"name": "proto"},
+    {"name": "act"},
+    {"name": "signature_id"},
+    {"name": "severity_id"}
+  ],
+  "values": [
+    ["192.168.1.22", "10.0.0.9", 44444, 443, "TCP", "allowed", "100", "5"],
+    ["10.0.0.99", "10.0.0.5", 51515, 22, "TCP", "deny", "200", "7"],
+    ["192.168.1.10", "10.0.0.5", 12345, 80, "TCP", "allowed", "100", "5"]
+  ],
+  "row_count": 3,
+  "matchCount": 3
+}

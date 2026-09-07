@@ -89,7 +89,7 @@ python scripts/sdl_cli.py delete-config-file --name /datatables/Stale
 
 The CLI subcommands are `config-files`, `config-file`, `put-config-file`, `delete-config-file`, `query`, `power-query`, `facet-query`, `numeric-query`, and `timeseries-query`. The legacy `list-files` / `get-file` / `put-file` subcommands remain but use the incomplete REST surface; prefer the `config-*` set.
 
-**Log/event ingestion is not part of this CLI.** The former `upload-logs` and `add-events` subcommands were removed when ingestion moved to the HEC endpoint. To ingest raw logs or events, use the `hec_ingest` tool in `s1-secops-mcp` (posts to `S1_HEC_INGEST_URL` and applies a named parser via `sourcetype`).
+**Log/event ingestion is not part of this CLI.** The former `upload-logs` and `add-events` subcommands were removed when ingestion moved to the event collector. To ingest raw logs or events, use the `hec_ingest` tool in `s1-secops-mcp` (posts to `S1_HEC_INGEST_URL` and applies a named parser via `sourcetype`). It authenticates with an SDL Log Write Key in `S1_HEC_TOKEN`, not the console API token, and the key's own scope fixes the ingest destination.
 
 ## Python
 

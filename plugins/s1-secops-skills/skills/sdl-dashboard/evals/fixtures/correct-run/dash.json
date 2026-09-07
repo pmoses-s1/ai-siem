@@ -1,0 +1,32 @@
+{
+  "duration": "24h",
+  "description": "SOC overview, top row",
+  "graphs": [
+    {
+      "graphStyle": "markdown",
+      "title": "Alert posture",
+      "markdown": "High-severity alerts raised in the selected window. A sustained rise here is the signal to widen the window and check for a campaign.",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "w": 60,
+        "h": 5
+      }
+    },
+    {
+      "graphStyle": "number",
+      "title": "High-severity alerts (24h)",
+      "query": "dataSource.name='alert' severity_id >= 4 | group alerts=count() | limit 1",
+      "options": {
+        "format": "number",
+        "precision": 0
+      },
+      "layout": {
+        "x": 0,
+        "y": 5,
+        "w": 15,
+        "h": 10
+      }
+    }
+  ]
+}

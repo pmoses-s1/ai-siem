@@ -242,8 +242,8 @@ class Injection(unittest.TestCase):
 # not a harmless default: it changes which objects appear to exist.
 # ═══════════════════════════════════════════════════════════════════════════
 
-ACCOUNT = "2046190533732727925"
-SITE = "2547662415802335157"
+ACCOUNT = "1234567890123456789"
+SITE = "9876543210987654321"
 SITE_SCOPE = f"{ACCOUNT}:{SITE}"
 
 

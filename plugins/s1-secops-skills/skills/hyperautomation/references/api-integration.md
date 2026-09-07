@@ -676,6 +676,13 @@ the rest of the write-back actions, pass a different `id` in `actions[]`:
   which are absent from the live catalog) fails here while the HTTP action still reports 200. Enumerate
   the valid ids for an alert first via the `alertAvailableActions` query. (Live-validated 2026-07-24.)
 - Writes are **eventually consistent (~5s)**: don't read-after-write immediately and assume failure.
+- **Availability depends on the caller's permissions AND the alert type.** A service-user token can
+  be offered `statusUpdate` on a native STAR alert and not on one ingested via `POST /v1/alerts`,
+  where `alertAvailableActions` lists only `addNote` and `eventSearch` and the mutation answers
+  `Missing UAM manage permissions`. A console user session performs the identical mutation on either.
+  So before building a flow that writes back to third-party alerts, confirm the workflow's identity
+  has the UAM permission for that alert type, and check `integration-catalog.md` for the native
+  write-back actions.
 
 ---
 

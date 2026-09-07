@@ -13,7 +13,7 @@ and CLI subcommands (in `scripts/sdl_cli.py`).
 
 ## Ingestion (moved to HEC)
 
-SDL raw-log ingestion (`uploadLogs`, `addEvents`) has been removed from this skill. Ingest raw logs/events via the **HEC ingest** path (HTTP Event Collector on the ingest host, with a named `parser`), which feeds Event Search, PowerQuery, and detection rules. UAM alert/indicator creation is separate and lives in `mgmt-console-api` (`uam_*`, posted to `/v1/*` on the same ingest host but a distinct API). This skill now covers queries and configuration files only.
+SDL raw-log ingestion (`uploadLogs`, `addEvents`) has been removed from this skill. Ingest raw logs/events via the **event collector** on the ingest host (`/services/collector/raw` and `/event`, with a named `parser`), which feeds Event Search, PowerQuery, and detection rules. That path authenticates with an SDL Log Write Key (`S1_HEC_TOKEN`), not the console API token, and the key's own scope fixes the ingest destination. UAM alert creation is separate: it lives in `mgmt-console-api` (`uam_*`, posted to `/v1/alerts` on the same host but a distinct API, still using the console API token), and indicators ride inline in the alert rather than having an endpoint of their own. This skill now covers queries and configuration files only.
 
 ---
 

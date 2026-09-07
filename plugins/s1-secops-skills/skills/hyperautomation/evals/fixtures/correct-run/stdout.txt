@@ -1,0 +1,47 @@
+workflow.json written: the import envelope with one manual_trigger node, connected_to empty,
+parent_action null, and connection_id / connection_name / integration_id all null so it imports
+on any tenant.
+
+Two calls, in order:
+
+  1. POST /web/api/v2.1/hyper-automate/api/public/workflow-import-export/import?accountIds=<acct>
+     body {"data": <workflow>}
+  2. POST /web/api/v2.1/hyper-automate/api/v1/workflows/{workflow_id}/publish?accountIds=<acct>
+     bodyless, returns 204
+
+The second is not optional. A workflow created over the API lands as a Private Draft owned by the
+token's user, so it is invisible in the console to everyone else including the person who asked
+for it. Publishing transitions it to a Shared Draft, visible to the team and still inactive. Treat
+import and publish as one atomic step. Activation would publish implicitly, but the ask here stops
+at shared-but-not-running.
+
+actions.json written. parent_action is loop membership and nothing else. Setting it to the
+export_id of the preceding node to express order is the top cause of a 422 "Invalid workflow data"
+on a workflow where every field otherwise looks correct, which is exactly the symptom. All three
+nodes now carry parent_action: null and the running order comes from connected_to[].target:
+trigger to HTTP, HTTP to email, with the terminal email node's connected_to empty. export_id
+values only need to be unique integers, so 9 / 8 / 5 is fine.
+
+lrq_actions.json written. The 500 is "Header must start with Bearer". The flow is bound to the
+mgmt "SentinelOne" connection, which signs Authorization: ApiToken, and the SDL query endpoints
+require Bearer. Bind the "SentinelOne SDL" connection on both HTTP actions with
+use_authentication_data: true. The launch captures body.id and the X-Dataset-Query-Forward-Tag
+response header (mandatory, echoed on every GET). The poll and every action that reads it live
+inside the loop, because loop-scoped outputs do not resolve outside it. Both counters are read
+through Function.JQ with defaults, and the done-check is gated on stepsTotal greater than 0 so a
+0/0 first poll is not mistaken for a finished query.
+
+hec_action.json and connection.json written. It cannot reuse the SDL connection. The event
+collector takes an SDL Log Write Key, not the console API token: the write key returns HTTP 200
+and the console token returns HTTP 400 {"text":"Missing S1-Scope header","code":5}, and adding
+that header does not fix it. So this is a second Bearer connection whose api_key holds the Log
+Write Key, and the collector action sends no scope header at all, since the key is minted for one
+account or site and that fixes where events land. The payload carries dataSource.name,
+dataSource.vendor and dataSource.category set to security, plus site_id and a flat dotted
+"event.type" key. The secret in connection.json is a placeholder.
+
+gate.json written. The current gate is fail-open: it tests not_equals "dismissed", and on a Slack
+timeout the value resolves to empty, which is not equal to "dismissed", so the isolate runs with
+nobody having approved. The replacement fails closed: it tests equals "approved" and the isolate
+hangs off the "true" branch only, so a timeout takes the false branch and nothing destructive
+happens. condition_type is "multi" with a flat conditions array and condition: null.

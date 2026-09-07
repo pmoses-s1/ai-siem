@@ -24,6 +24,7 @@ See **[deploy/README.md](./deploy/README.md)** for the full deployment walkthrou
 | Mgmt Console | `s1_api_post` | mgmt-console-api |
 | Mgmt Console | `s1_api_put` | mgmt-console-api |
 | Mgmt Console | `uam_add_note` | mgmt-console-api |
+| Mgmt Console | `uam_available_actions` | mgmt-console-api |
 | Mgmt Console | `uam_get_alert` | mgmt-console-api |
 | Mgmt Console | `uam_list_alerts` | mgmt-console-api |
 | Mgmt Console | `uam_set_status` | mgmt-console-api |
@@ -45,7 +46,6 @@ See **[deploy/README.md](./deploy/README.md)** for the full deployment walkthrou
 | Hyperautomation | `ha_list_workflows` | hyperautomation |
 | UAM Ingest | `uam_ingest_alert` | mgmt-console-api (UAM Alert Interface) |
 | UAM Ingest | `uam_post_alert` | mgmt-console-api (UAM Alert Interface) |
-| UAM Ingest | `uam_post_indicators` | mgmt-console-api (UAM Alert Interface) |
 <!-- END AUTO-GENERATED TOOLS TABLE -->
 
 **2 resources:**
@@ -73,7 +73,7 @@ Add this to `claude_desktop_config.json` (or `.mcp.json` for Claude Code):
   "mcpServers": {
     "s1-secops-mcp": {
       "command": "npx",
-      "args": ["-y", "@pmoses-s1/s1-secops-mcp@1.3.6"],
+      "args": ["-y", "@pmoses-s1/s1-secops-mcp@1.3.8"],
       "env": {
         "S1_CONSOLE_URL":       "https://usea1-yourorg.sentinelone.net",
         "S1_CONSOLE_API_TOKEN": "eyJ...",
@@ -136,7 +136,9 @@ Credential keys, where to get each one, and the two token types are documented c
 
 `S1_CONSOLE_URL` and `S1_CONSOLE_API_TOKEN` are sufficient for the PowerQuery, Mgmt Console REST, Purple AI summary, UAM, Hyperautomation, and SDL config-file tools (22 of the 26).
 
-`S1_HEC_INGEST_URL` is **required** for the three UAM Ingest tools (`uam_ingest_alert`, `uam_post_indicators`, `uam_post_alert`) and for `hec_ingest`, the only four tools that need it. Without it those tools error at call time; the rest still work.
+`S1_HEC_INGEST_URL` is **required** for the two UAM Ingest tools (`uam_ingest_alert`, `uam_post_alert`) and for `hec_ingest`, the only three tools that need it. Without it those tools error at call time; the rest still work.
+
+`hec_ingest` additionally needs **`S1_HEC_TOKEN`**, an SDL Log Write Key. It is a different credential from the console API token, which the event collector refuses outright, and no API mints one: Console > Singularity Data Lake > API Keys > Log Write Key. The key is issued for a single account or site and writes only there, so it fixes the destination and there is no scope header to override it. UAM alert ingest and IOCs are unaffected and still use `S1_CONSOLE_API_TOKEN`.
 
 The SDL config-file tools (`sdl_list_files`, `sdl_get_file`, `sdl_put_file`, `sdl_delete_file`) are authorised by `S1_CONSOLE_API_TOKEN` against `POST <console>/sdl/v2/graphql`. The scoped SDL keys (`SDL_CONFIG_READ_KEY`, `SDL_CONFIG_WRITE_KEY`, `SDL_LOG_READ_KEY`, `SDL_LOG_WRITE_KEY`, `SDL_XDR_URL`) are retired and are no longer read.
 
@@ -144,7 +146,8 @@ The SDL config-file tools (`sdl_list_files`, `sdl_get_file`, `sdl_put_file`, `sd
 |----------|-------------|--------------|
 | `S1_CONSOLE_URL` | Console URL, e.g. `https://usea1-acme.sentinelone.net` | All Mgmt + PowerQuery + SDL tools |
 | `S1_CONSOLE_API_TOKEN` | Mgmt Console API token (Settings → Users → Service Users) | All Mgmt + PowerQuery + UAM + SDL config-file tools |
-| `S1_HEC_INGEST_URL` | HEC ingest host, e.g. `https://ingest.us1.sentinelone.net` | `uam_ingest_alert`, `uam_post_indicators`, `uam_post_alert`, `hec_ingest` |
+| `S1_HEC_INGEST_URL` | Ingest host, e.g. `https://ingest.us1.sentinelone.net` | `uam_ingest_alert`, `uam_post_alert`, `hec_ingest` |
+| `S1_HEC_TOKEN` | SDL Log Write Key, scoped to one account or site. Optional; only raw log ingest needs it. Same variable name as the deployer repos. | `hec_ingest` |
 
 ### Credential resolution order (highest priority wins)
 

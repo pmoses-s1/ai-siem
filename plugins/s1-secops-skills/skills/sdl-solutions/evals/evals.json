@@ -1,0 +1,360 @@
+{
+  "skill_name": "sdl-solutions",
+  "evals": [
+    {
+      "id": 0,
+      "name": "onboarding-parser-eligibility-gate",
+      "prompt": "Onboard our `acme_edge` logs into AI SIEM. Before you build anything, note what I already found: a sample event carries a `message` attribute but there is no `parser` attribute on it. Run the Step 0 eligibility gate properly rather than assuming. Save the two probe queries to `onboarding/probes/parser_present.pq` and `onboarding/probes/parser_absent.pq` (query text only), write the gate decision to `onboarding/eligibility.json`, and tell me plainly whether you can build an SDL parser for this source and what I have to do instead.",
+      "expected_output": "The gate runs before any parser work. An SDL parser sees exactly two attributes on an event, `message` and `parser`: `parser` names which parser to apply and it is applied to the content of `message`, so everything else is invisible to it. With `message` present and `parser` absent the SDL parser cannot select a parser at all, so the answer is that no parser is built here; the fix is to set a `parser` attribute on the event in Data Pipeline Management, then re-run the gate and proceed to Step 1. The probes use the confirmed idioms: `parser = *` for presence and the parenthesised `!(parser = *)` for absence, never bare `!parser` (matches every row) and never `parser == null` (HTTP 500). `onboarding/eligibility.json` records `message` present, `parser` absent, `sdl_parser_eligible` false, and the DPM remediation. No parser config file is written.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "onboarding/probes/parser_present.pq"
+        },
+        {
+          "type": "pq_valid",
+          "glob": "onboarding/probes/parser_absent.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "onboarding/probes/parser_present.pq",
+          "pattern": "\\bparser\\s*=\\s*\\*"
+        },
+        {
+          "type": "file_matches",
+          "glob": "onboarding/probes/parser_absent.pq",
+          "pattern": "!\\(\\s*parser\\s*=\\s*\\*\\s*\\)"
+        },
+        {
+          "type": "json_parses",
+          "glob": "onboarding/eligibility.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/eligibility.json",
+          "path": "sdl_parser_eligible",
+          "equals": false
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/eligibility.json",
+          "path": "remediation",
+          "matches": "(?i)data pipeline management|\\bDPM\\b"
+        },
+        {
+          "type": "file_absent",
+          "glob": "**/logParsers/*"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)data pipeline management"
+        },
+        {
+          "type": "output_absent",
+          "pattern": "(?i)(?:deployed|created|wrote|built) the parser"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "onboarding-detection-asset-binding",
+      "prompt": "For the source we just onboarded, build the \"outbound connection to a destination we have not seen before\" scheduled detection. Two complaints about the last batch of rules we shipped: every alert shows up as \"Unknown Device\", and they only re-notify once a day so live C2 stays hidden until tomorrow. The body needs the enriched device context from our endpoint lookup table. Save the PowerQuery body on its own to `onboarding/queries/new_dest.pq` and the full creation payload to `onboarding/detection.json`. Tell me which flag I have to pass when I list the rules afterwards, or I will think the deploy failed.",
+      "expected_output": "A `scheduled` rule: `queryType: scheduled`, `queryLang: \"2.0\"`, PowerQuery in `data.scheduledParams.query`, and no inline mitigation (`treatAsThreat: \"UNDEFINED\"`, `networkQuarantine: false`), because scheduled rules cannot act inline. The body aggregates inside `group`, joins the endpoint lookup after the group, and ends with an explicit `| columns` projection carrying the metric plus the `device_*` asset context; without that projection the alert has no named output columns and the context is lost. `data.entityMappings` maps the identity columns and is capped at three entries, a fourth returns `400: entityMappings: Longer than maximum length 3`, so the device identity column (`device_agentid` or `device_host`) plus two network columns is the right pick, which is what stops \"Unknown Device\". `coolOffSettings.renotifyMinutes` is tied to severity and cadence, around 60 for a high-severity active-threat rule, never 1440. Scope is `accountIds`, because the body reads a lookup table and lookups are account-level objects, so site-scoped creation of a lookup-reading rule is invalid. The reply names `isLegacy=false` on `GET /cloud-detection/rules`, without which every scheduled rule is silently omitted from the listing.",
+      "assertions": [
+        {
+          "type": "pq_valid",
+          "glob": "onboarding/queries/new_dest.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "onboarding/queries/new_dest.pq",
+          "pattern": "\\|\\s*columns\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "onboarding/queries/new_dest.pq",
+          "pattern": "\\|\\s*group\\b"
+        },
+        {
+          "type": "file_matches",
+          "glob": "onboarding/queries/new_dest.pq",
+          "pattern": "device_"
+        },
+        {
+          "type": "json_parses",
+          "glob": "onboarding/detection.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/detection.json",
+          "path": "data.queryType",
+          "equals": "scheduled"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/detection.json",
+          "path": "data.queryLang",
+          "equals": "2.0"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/detection.json",
+          "path": "data.treatAsThreat",
+          "equals": "UNDEFINED"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/detection.json",
+          "path": "data.networkQuarantine",
+          "equals": false
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/detection.json",
+          "path": "data.scheduledParams.query",
+          "exists": true
+        },
+        {
+          "type": "file_matches",
+          "glob": "onboarding/detection.json",
+          "pattern": "\"columnName\"",
+          "count": 3
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/detection.json",
+          "path": "data.coolOffSettings.renotifyMinutes",
+          "matches": "^(?!1440$)\\d+$"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "onboarding/detection.json",
+          "path": "filter.accountIds.0",
+          "exists": true
+        },
+        {
+          "type": "output_matches",
+          "pattern": "isLegacy=false"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "ingest-health-exclusions-are-a-lookup",
+      "prompt": "Deploy ingest health monitoring on this tenant. Two scoping requirements: the platform's own internal streams must not be monitored, and Zscaler is decommissioned so drop it too. I do not want source names baked into the query bodies, because the last person did that and every scope change turned into a redeploy. Save the exclusions table to `ingesthealth/ingestHealthExclusions.csv`, the volume-spike detection body to `ingesthealth/queries/spike.pq`, and the deploy order as an ordered list in `ingesthealth/deploy_order.json`. Then tell me why a `dataSource.vendor != 'SentinelOne'` filter would not have done this job.",
+      "expected_output": "One editable CSV lookup, `ingestHealthExclusions.csv`, with the header `value,match_type,reason`, and every query body carrying the same anti-join right after its opener: `| lookup ih_excl_n = reason from ingestHealthExclusions.csv by value =:anycase dataSource.name | lookup ih_excl_v = reason from ingestHealthExclusions.csv by value =:anycase dataSource.vendor | filter (ih_excl_n = null and ih_excl_v = null)`. No `dataSource.name != '...'` clauses anywhere, that is the pattern being replaced. The internal streams are listed BY NAME (`alert`, `indicator`, `asset`, `ActivityFeed`, `misconfiguration`, `finding`, `risk`) because `dataSource.vendor != 'SentinelOne'` KEEPS null-vendor rows and every one of those leaks back in. Zscaler goes in as a vendor-match row. The CSV is deployed FIRST, before anything that references it, or `lookup ... from ingestHealthExclusions.csv` errors \"file not found\"; the baseline builder follows.",
+      "assertions": [
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/ingestHealthExclusions.csv",
+          "pattern": "(?m)^value,match_type,reason"
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/ingestHealthExclusions.csv",
+          "pattern": "(?mi)^alert,"
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/ingestHealthExclusions.csv",
+          "pattern": "(?mi)^indicator,"
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/ingestHealthExclusions.csv",
+          "pattern": "(?mi)^risk,"
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/ingestHealthExclusions.csv",
+          "pattern": "(?mi)^zscaler,"
+        },
+        {
+          "type": "pq_valid",
+          "glob": "ingesthealth/queries/spike.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/queries/spike.pq",
+          "pattern": "\\|\\s*lookup\\s+ih_excl_n\\s*="
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/queries/spike.pq",
+          "pattern": "\\|\\s*lookup\\s+ih_excl_v\\s*="
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/queries/spike.pq",
+          "pattern": "filter\\s*\\(\\s*ih_excl_n\\s*=\\s*null\\s+and\\s+ih_excl_v\\s*=\\s*null\\s*\\)"
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/queries/spike.pq",
+          "pattern": "dataSource\\.(?:name|vendor)\\s*!=",
+          "count": 0
+        },
+        {
+          "type": "json_parses",
+          "glob": "ingesthealth/deploy_order.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "ingesthealth/deploy_order.json",
+          "pattern": "(?s)ingestHealthExclusions\\.csv.*ingestHealthBaseline"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)file not found"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)null[ -]vendor|vendor[^.\\n]{0,40}\\bnull\\b"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "exclusion-rule-type-choice",
+      "prompt": "Our Akamai DNS failed-lookup detection alerts non-stop on the vulnerability-scanner subnets and on our own corporate domains. The allowlist is long, the platform team edits it most weeks, and my manager wants to see what it is actually suppressing. You have enough there to pick the rule type without asking me. Save the creation payload to `exclusions/rule.json` and the detection body to `exclusions/queries/body.pq`, then tell me which of the three STAR rule types you picked and why the other two are wrong for this.",
+      "expected_output": "The scheduled type (`queryType: \"scheduled\"`). Single-event and correlation bodies are boolean S1QL with NO pipes, so their exclusion can only be an inline hardcoded `AND NOT (<field> in:anycase (...))` negative list edited into the rule itself, and with no pipes there is no anti-join and therefore no effectiveness dashboard, which fails both the weekly-edit and the show-me-what-it-suppresses requirements. The scheduled body carries `| lookup excl_<name> = reason from <TABLE>.csv by <key> <op> <event field>` then `| filter excl_<name> = null` (null means not on the list, so kept), with distinct join vars per list, and the dashboard counts the exact inverse `| filter excl_<name> = *` over the same window, since excluded plus kept equals total by construction. `queryLang` is `\"2.0\"`, `treatAsThreat` is `\"UNDEFINED\"` and `networkQuarantine` false, and the scope is `accountIds` only: the body reads lookup tables, which are account-level objects, so site-scoped creation is invalid.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "exclusions/rule.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "exclusions/rule.json",
+          "path": "data.queryType",
+          "equals": "scheduled"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "exclusions/rule.json",
+          "path": "data.queryLang",
+          "equals": "2.0"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "exclusions/rule.json",
+          "path": "data.treatAsThreat",
+          "equals": "UNDEFINED"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "exclusions/rule.json",
+          "path": "filter.accountIds.0",
+          "exists": true
+        },
+        {
+          "type": "file_matches",
+          "glob": "exclusions/rule.json",
+          "pattern": "\"siteIds\"",
+          "count": 0
+        },
+        {
+          "type": "pq_valid",
+          "glob": "exclusions/queries/body.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "exclusions/queries/body.pq",
+          "pattern": "\\|\\s*lookup\\s+excl[A-Za-z0-9_]*\\s*="
+        },
+        {
+          "type": "file_matches",
+          "glob": "exclusions/queries/body.pq",
+          "pattern": "\\|\\s*filter\\s+excl[A-Za-z0-9_]*\\s*=\\s*null"
+        },
+        {
+          "type": "file_matches",
+          "glob": "exclusions/queries/body.pq",
+          "pattern": "in:anycase\\s*\\(",
+          "count": 0
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)single[ -]event"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)correlation"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "excl[A-Za-z0-9_]*\\s*=\\s*\\*"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "rba-collector-two-credentials",
+      "prompt": "Deploy the RBA risk collector. Our first attempt fails: the query step is fine on the \"SentinelOne SDL\" connection, but the publish step comes back `HTTP 400 {\"text\":\"Missing S1-Scope header\",\"code\":5}` and adding that header changed nothing. Save the collector's two HTTP actions to `rba/collector_actions.json`, the connection-creation body for whatever the publish step actually needs to `rba/hec_connection.json` with a placeholder where the secret goes and never a real key, and the risk-index verification query to `rba/queries/risk_confirm.pq`. Give me the deploy sequence from import through to running.",
+      "expected_output": "Two credentials in one flow, therefore two connections. Run Contributors posts to `{{S1_CONSOLE_URL}}/sdl/api/powerQuery` and keeps the console-JWT \"SentinelOne SDL\" connection. Publish Risk Events posts to `{{HEC_INGEST_URL}}/services/collector/event?isParsed=true` and needs a separate Bearer connection whose key value is an SDL Log Write Key; the 400 reads like a missing header but is really the wrong credential, which is why adding `S1-Scope` did nothing. That action sends no `S1-Scope` header at all: the collector does not read it and the write key's scope is fixed at mint time. Both actions set `use_authentication_data: true`. Sequence: import, publish to a Shared Draft in the SAME step (an API import lands as a Private Draft owned by the token's user and is invisible to the requester), prompt the user to bind both connections in the console because the API cannot bind them, then activate, then run-now and confirm fresh events query back. The verification query casts with `number(risk_score)` before `sum`, since SDL columns can be string-typed.",
+      "assertions": [
+        {
+          "type": "json_parses",
+          "glob": "rba/collector_actions.json"
+        },
+        {
+          "type": "file_matches",
+          "glob": "rba/collector_actions.json",
+          "pattern": "/services/collector/event"
+        },
+        {
+          "type": "file_matches",
+          "glob": "rba/collector_actions.json",
+          "pattern": "/sdl/api/powerQuery"
+        },
+        {
+          "type": "file_matches",
+          "glob": "rba/collector_actions.json",
+          "pattern": "\"use_authentication_data\"\\s*:\\s*true"
+        },
+        {
+          "type": "file_matches",
+          "glob": "rba/collector_actions.json",
+          "pattern": "\"S1-Scope\"\\s*:",
+          "count": 0
+        },
+        {
+          "type": "json_parses",
+          "glob": "rba/hec_connection.json"
+        },
+        {
+          "type": "file_json_path",
+          "glob": "rba/hec_connection.json",
+          "path": "data.authentication_data.way_to_pass_prefix",
+          "equals": "Bearer"
+        },
+        {
+          "type": "file_matches",
+          "glob": "rba/hec_connection.json",
+          "pattern": "(?i)log[ _-]?write[ _-]?key"
+        },
+        {
+          "type": "pq_valid",
+          "glob": "rba/queries/risk_confirm.pq"
+        },
+        {
+          "type": "file_matches",
+          "glob": "rba/queries/risk_confirm.pq",
+          "pattern": "number\\(\\s*risk_score\\s*\\)"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)Missing S1-Scope header"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "(?i)shared draft"
+        },
+        {
+          "type": "output_matches",
+          "pattern": "/publish"
+        }
+      ]
+    }
+  ]
+}

@@ -43,7 +43,7 @@ There is no `lookup` in a single-event body (no pipes). To exclude known-good ac
 
 `s1ql` stays empty; the logic lives in `data.correlationParams`:
 
-- `entity`: the field events are grouped/correlated by. `user` is tenant-confirmed; device/endpoint/IP-style entities also exist.
+- `entity`: the correlation key. `user` and `ip` are tenant-confirmed built-ins; device/endpoint-style entities also exist. Set `custom` to key on an arbitrary field path, see "Custom correlation key" below.
 - `matchInOrder`: `false` = sub-queries may match in any order; `true` = ordered sequence (sub-query 1, then 2, and so on).
 - `timeWindow.windowMinutes`: the correlation window.
 - `subQueries[]`: each `{ "matchesRequired": N, "subQuery": "<boolean S1QL, no pipes>" }`. One sub-query with `matchesRequired: N` is a threshold detection (N of the same event by entity in the window). Multiple sub-queries form a multi-stage / sequence detection.
@@ -69,6 +69,48 @@ There is no `lookup` in a single-event body (no pipes). To exclude known-good ac
 ```
 
 Tenant-validated 2026-06-24: a single-subQuery correlation (`entity:"user"`, `matchInOrder:false`, `windowMinutes:60`, `matchesRequired:2`) was accepted (created Draft, then deleted). The existing "Abnormal Spike in SSH Login Failures" rule uses two sub-queries with `matchesRequired:500` each over a 60-minute window.
+
+#### Custom correlation key (`entity: "custom"`)
+
+When no built-in entity fits, correlate on a field path of your choosing.
+`entitiesAndFields` is a **list of lists, one inner list per sub-query, matched
+positionally**:
+
+```json
+"correlationParams": {
+  "entity": "custom",
+  "entitiesAndFields": [ ["src.process.parent.storyline.id"],
+                         ["tgt.process.storyline.id"] ],
+  "matchInOrder": false,
+  "timeWindow": {"windowMinutes": 10},
+  "subQueries": [
+    {"matchesRequired": 1, "subQuery": "event.type='Process Creation'"},
+    {"matchesRequired": 1, "subQuery": "event.type='IP Connect'"}
+  ]
+}
+```
+
+Sub-query 1 is keyed on the first inner list, sub-query 2 on the second, so this
+joins two different field paths that hold the same identity.
+
+Rejections, each quoted from the API response that produced it:
+
+| Mistake | Response |
+|---|---|
+| `customEntityKey` instead of `entitiesAndFields` | `correlationParams: dict_values(['customEntityKey']): Unknown field` |
+| `entity: "custom"` with no key | `entities_and_fields: entitiesAndFields is required when entity is Custom` |
+| a flat list of strings | `entitiesAndFields: Not a valid list` |
+| an object instead of a list, per element | `entitiesAndFields: 0: Not a valid list` |
+| the same path in two inner lists | `entityFields contains duplicate alias(es): '<path>'` |
+
+The duplicate-alias rule is the surprising one: two sub-queries correlating on
+the same logical identity must reference it by two **different** field paths.
+Tenant-validated: the block above was accepted, created, read back with
+`entitiesAndFields` intact, and deleted.
+
+Scope note: an account-scoped token creating with `filter.tenant` returns
+`User <id>:account can not create rule with higher scope None:tenant`. Pass
+`filter.accountIds` instead.
 
 ### Scheduled (`queryType: "scheduled"`)
 

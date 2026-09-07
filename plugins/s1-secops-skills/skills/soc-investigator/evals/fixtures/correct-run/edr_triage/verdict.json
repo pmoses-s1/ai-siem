@@ -1,0 +1,17 @@
+{
+  "alert_id": "1770000000000000002",
+  "verdict": "SUSPICIOUS - Pending Confirmation",
+  "confidence": "suggests",
+  "escalate": false,
+  "ceiling_reason": "None of the three confirmation gates is met, so Pending Confirmation is the maximum classification available.",
+  "gates": {
+    "threat_intel_malicious_verdict": "not obtained - external enrichment declined by the operator (SentinelOne-only), so it was skipped",
+    "mdr_or_analyst_confirmation": "none - notes and history are both empty",
+    "multi_source_corroboration": "none - one detection engine firing once is not two independent sources"
+  },
+  "what_would_lift_it": [
+    "an external enrichment verdict on any indicator the script touched, if the policy allows it",
+    "an MDR or analyst review recorded on the alert",
+    "the same behaviour corroborated in an independent source, for example firewall or Windows Event Log telemetry for FIN-WKS-0042"
+  ]
+}

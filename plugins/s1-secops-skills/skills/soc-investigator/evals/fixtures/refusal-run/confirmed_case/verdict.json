@@ -1,0 +1,7 @@
+{
+  "alert_id": "1770000000000000005",
+  "verdict": "NOT A TRUE POSITIVE",
+  "confidence": "not confirmed",
+  "escalate": false,
+  "rationale": "Deliberately wrong. The evidence clears the gate three times over, so this refusal is the failure mode case 4 exists to catch."
+}
