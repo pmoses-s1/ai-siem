@@ -178,6 +178,36 @@ oc = ua.action_outcome(ua.set_alert_status(
 `offered` (available here, so the mutation error is the real cause and worth
 escalating).
 
+### When an action is `not_offered`, check the Hyperautomation catalog before concluding "impossible"
+
+`alertAvailableActions` answers *what this token can trigger through this API*. It
+does not answer *what the platform can do to this alert*. Hyperautomation ships
+native integration actions for exactly these write-backs, and they are listed in
+`hyperautomation/references/integration-catalog.md` with their `public_action_id`:
+
+| Native HA action | Endpoint in the catalog |
+|---|---|
+| `Set Alert Status to Resolved` (`cef56759-…`) | `/web/api/v2.0/threats` |
+| `Resolve Alert as False Positive Benign` (`695e0289-…`) | `/web/api/v2.0/threats` |
+| `Resolve Alert as True Positive Malware` (`2c03fe1f-…`) | `/web/api/v2.0/threats` |
+| `Verdict False Positive Benign` (`fb264d94-…`) | `/web/api/v2.1/unifiedalerts/graphql` |
+| `Status In Progress` (`b9658ad8-…`) | `/web/api/v2.1/unifiedalerts/graphql` |
+
+Read that table carefully before assuming it is a way round a `not_offered`
+result. The `unifiedalerts/graphql` rows are the same endpoint and the same
+`alertTriggerActions` ids documented above, so they inherit the same per-alert-type
+availability: no bypass. The `/web/api/v2.0/threats` rows belong to the EDR
+**threat** family, which is a different object from a UAM alert and which
+`hyperautomation/references/api-integration.md` records as decommissioned
+(HTTP 405) for note, verdict and status write-backs.
+
+What is genuinely untested is whether a native action, executed by the platform
+under its own identity rather than by a service-user token, is bound by the same
+availability. Resolve that by running the action in a workflow, not by reasoning
+about it. The point of this section is the search order: **UAM availability, then
+the HA integration catalog, then the console UI, and only then "no route exists".**
+Two of those were skipped on the run that produced this note.
+
 Two further measured facts from the same probe:
 
 - Action availability is **scope-sensitive**. The incident actions
