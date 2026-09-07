@@ -643,21 +643,18 @@ export async function uamSetStatus(alertId, status) {
   }
   if (action.failure?.length) {
     const f = action.failure[0];
-    // errorMessage says WHAT failed, not WHY. `Missing UAM manage permissions`
-    // is also what a not-offered action returns: alerts ingested via the UAM
-    // Alert Interface (/v1/alerts) expose only addNote and eventSearch, while
-    // the same token sets status on a native alert successfully (measured).
-    // So ask alertAvailableActions before reporting a cause, and never let the
-    // caller conclude "the token lacks permission" from the string alone.
+    // errorMessage names the failure, not the cause. Ask alertAvailableActions,
+    // which is filtered by the caller's permissions AND the alert type.
     let hint = '';
     try {
       const avail = await uamAvailableActions(alertId);
       const ids = avail.map((a) => a.id);
       if (!ids.includes('S1/alert/statusUpdate')) {
-        hint = ' | alertAvailableActions: statusUpdate is NOT OFFERED for this '
-             + `alert type (available: ${ids.join(', ') || 'none'}). This is a `
-             + 'capability limit of the alert, not a token scope; a new token '
-             + 'will not help.';
+        hint = ' | alertAvailableActions: statusUpdate is NOT OFFERED to this '
+             + `caller for this alert (available: ${ids.join(', ') || 'none'}). `
+             + 'Availability is filtered by the caller\'s permissions and the '
+             + 'alert type: check the service user\'s UAM permissions. A '
+             + 'console user session may still be able to perform it.';
       } else {
         const a = avail.find((x) => x.id === 'S1/alert/statusUpdate');
         hint = a?.isDisabled

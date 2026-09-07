@@ -380,9 +380,9 @@ def main() -> int:
     if _diag["S1/alert/statusUpdate"]["state"] != "offered":
         _log("CLEANUP SKIPPED: alertAvailableActions reports statusUpdate "
              f"{_diag['S1/alert/statusUpdate']['state']} for this alert type "
-             f"(available here: {', '.join(_diag['available'])}). This is a "
-             "capability limit of alerts ingested via /v1/alerts, not a token "
-             "scope, so resolve it in the console if you want it closed.")
+             f"(available here: {', '.join(_diag['available'])}). This "
+             "caller lacks the UAM permission for this alert type; resolve it "
+             "in the console, or grant the service user UAM manage.")
         ua.add_alert_note(mgmt, uam_alert_id,
                           "Smoke test complete, safe to resolve.")
         _log("UAM Alert Interface single: INGEST -> POLL -> LINK -- OK; "

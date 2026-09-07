@@ -676,16 +676,13 @@ the rest of the write-back actions, pass a different `id` in `actions[]`:
   which are absent from the live catalog) fails here while the HTTP action still reports 200. Enumerate
   the valid ids for an alert first via the `alertAvailableActions` query. (Live-validated 2026-07-24.)
 - Writes are **eventually consistent (~5s)**: don't read-after-write immediately and assume failure.
-- **Availability is per alert TYPE, not just per token.** Alerts ingested through the UAM Alert
-  Interface (`POST /v1/alerts`) offer only `S1/alert/addNote` and `S1/alert/eventSearch`;
-  `statusUpdate` and `analystVerdictUpdate` are absent from `alertAvailableActions` for them and the
-  mutation answers `Missing UAM manage permissions`, which reads as a token problem and is not one.
-  The same token round-trips a native alert `NEW` → `IN_PROGRESS` → `NEW`. So a workflow that
-  auto-resolves third-party alerts needs the native catalog actions
-  (`integration-catalog.md`: `Set Alert Status to Resolved`, `Resolve Alert as …`), not this
-  GraphQL envelope. Note that the catalog lists the resolve variants against
-  `/web/api/v2.0/threats`, the decommissioned EDR **threat** family, so verify the action against a
-  real alert before building a flow on it.
+- **Availability depends on the caller's permissions AND the alert type.** A service-user token can
+  be offered `statusUpdate` on a native STAR alert and not on one ingested via `POST /v1/alerts`,
+  where `alertAvailableActions` lists only `addNote` and `eventSearch` and the mutation answers
+  `Missing UAM manage permissions`. A console user session performs the identical mutation on either.
+  So before building a flow that writes back to third-party alerts, confirm the workflow's identity
+  has the UAM permission for that alert type, and check `integration-catalog.md` for the native
+  write-back actions.
 
 ---
 

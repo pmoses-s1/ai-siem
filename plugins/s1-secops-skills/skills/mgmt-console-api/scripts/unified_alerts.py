@@ -737,12 +737,10 @@ def trigger_actions(
     as success. Pass the payload through `action_outcome()` instead of
     eyeballing it.
 
-    `failure[].errorMessage` says WHAT went wrong but is not trustworthy about
-    WHY: an action that is simply not offered for this alert type returns
-    `Missing UAM manage permissions`, which reads as a token-scope problem and
-    is not one. With `diagnose_failures=True` (the default) this function asks
-    `alertAvailableActions` on any failure and attaches the authoritative
-    answer under `resp["diagnosis"]`. See `explain_action_failure`.
+    With `diagnose_failures=True` (the default) any failure is annotated from
+    `alertAvailableActions` under `resp["diagnosis"]`, which distinguishes
+    "this caller may not trigger it here" from a state problem. See
+    `explain_action_failure`.
     """
     query = """
     mutation trigger(
@@ -812,10 +810,11 @@ def explain_action_failure(
 
     Three distinct outcomes, which the mutation's error string conflates:
 
-    * `not_offered`  the action is absent from the alert's available-action
-      list. The alert TYPE does not support it (measured: alerts ingested
-      through the UAM Alert Interface `/v1/alerts` offer only
-      `S1/alert/addNote` and `S1/alert/eventSearch`). No token change helps.
+    * `not_offered`  this caller cannot trigger it on this alert. The list is
+      filtered by the caller's permissions AND the alert type: a token can be
+      offered `statusUpdate` on a native STAR alert and not on one ingested via
+      `/v1/alerts`, while a console user session performs it on either. Check
+      the service user's UAM permissions; it does not mean "impossible".
     * `disabled`     offered but disabled, with the API's own
       `disabledReason` (measured: `INCIDENT_ACTIONS_ONLY_AVAILABLE_FROM_SITE_VIEW`
       for the incident actions under ACCOUNT scope, enabled under SITE).
@@ -834,9 +833,11 @@ def explain_action_failure(
         if aid not in offered:
             out[aid] = {
                 "state": "not_offered",
-                "reason": ("this alert type does not offer the action; the "
-                           "mutation's own error message may claim a "
-                           "permissions problem and be wrong"),
+                "reason": ("this caller cannot trigger it on this alert. The "
+                           "list is filtered by the caller's permissions as "
+                           "well as the alert type, so check the service "
+                           "user's UAM permissions; a console user session may "
+                           "still be able to perform it"),
             }
         elif offered[aid].get("isDisabled"):
             out[aid] = {"state": "disabled",

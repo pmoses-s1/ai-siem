@@ -181,7 +181,7 @@ class TestFailureDiagnosis(unittest.TestCase):
         resp["diagnosis"] = {
             "available": ["S1/alert/addNote"],
             "S1/alert/statusUpdate": {"state": "not_offered",
-                                      "reason": "alert type does not offer it"},
+                                      "reason": "this caller may not trigger it here"},
         }
         oc = ua.action_outcome(resp)
         self.assertFalse(oc["applied"])
@@ -213,17 +213,19 @@ class TestTriggerActionsQuery(unittest.TestCase):
         src = (SKILL_DIR / "scripts" / "unified_alerts.py").read_text()
         self.assertIn("diagnose_failures: bool = True", src)
 
-    def test_docs_do_not_claim_a_token_permission_limit(self):
-        """The wrong claim must not come back.
-
-        `Missing UAM manage permissions` was documented as a per-action token
-        limit. It is a per-alert-type capability limit. Assert the corrected
-        framing is present in the reference the skill points readers to.
-        """
+    def test_docs_state_availability_depends_on_caller_and_type(self):
+        """Availability is filtered by the caller's permissions AND the alert
+        type. Neither factor alone is the rule, and `not_offered` never means
+        impossible: a console user session performs writes a service-user token
+        is refused."""
         ref = (SKILL_DIR / "references" / "UNIFIED_ALERTS.md").read_text()
-        self.assertIn("errorMessage` is not a diagnosis", ref)
-        self.assertIn("does not mean the token lacks a scope", ref)
-        self.assertNotIn("Write permission is per-action, not per-alert", ref)
+        self.assertIn("filtered by the caller's permissions AND the alert type",
+                      ref)
+        self.assertIn("console user session", ref)
+        for wrong in ("capability limit of the alert",
+                      "no token change helps",
+                      "Write permission is per-action, not per-alert"):
+            self.assertNotIn(wrong, ref)
 
 
 if __name__ == "__main__":

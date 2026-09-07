@@ -140,84 +140,45 @@ if not oc["applied"]:
 `TriggerActionsScheduled` payload gives `applied=False`, because a bulk job has
 not written anything yet and the caller has to poll.
 
-### `errorMessage` is not a diagnosis: never infer a permission limit from it
+### A refused action: ask `alertAvailableActions` for the cause
 
-**`Missing UAM manage permissions` does not mean the token lacks a scope.** It
-is also what you get when the action is not offered for that alert's type. All
-of the following were measured on one tenant with one token, minutes apart:
+`failure[].errorMessage` names the failure, not the cause. Query
+`alertAvailableActions` with a narrow filter and read `isDisabled` /
+`disabledReason`. `trigger_actions(diagnose_failures=True)` (the default) does
+this on any failure and attaches the result under `resp["diagnosis"]`, which
+`action_outcome` folds into its error strings.
 
-| Alert | `statusUpdate` per `alertAvailableActions` | Mutation result |
-|---|---|---|
-| ingested via `/v1/alerts` (UAM Alert Interface) | absent from the list entirely | `failure`, `Missing UAM manage permissions` |
-| native STAR / third-party / correlation alert | `enabled` | `success`, `updatedAt` moves |
+`explain_action_failure()` returns three states:
 
-Same token, same `ACCOUNT` scope, same `stringEqual` filter, same code path. A
-reversible round-trip on a supported alert proved the token: `NEW` to
-`IN_PROGRESS` to `NEW`, `applied=True` both ways. So the ingested-alert
-refusal is a **capability** fact about the alert type, and a token change fixes
-nothing.
-
-The rule this repo now enforces: **when an action is refused, ask
-`alertAvailableActions` before stating a cause.** It returns `isDisabled` and
-`disabledReason` per action and is the only authoritative answer.
-`trigger_actions(diagnose_failures=True)` (the default) does this
-automatically on any failure and attaches the result under
-`resp["diagnosis"]`, which `action_outcome` folds into its error strings:
-
-```python
-oc = ua.action_outcome(ua.set_alert_status(
-    c, scope_input=sc, alert_ids=[aid], status="RESOLVED"))
-# oc["errors"] ->
-#   ['S1/alert/statusUpdate: Missing UAM manage permissions (id=...) '
-#    '[alertAvailableActions: not_offered, this alert type does not offer '
-#    'the action; ...]']
-```
-
-`explain_action_failure()` returns the three states directly: `not_offered`
-(alert type does not support it), `disabled` (offered, with the API's reason),
-`offered` (available here, so the mutation error is the real cause and worth
-escalating).
-
-### When an action is `not_offered`, check the Hyperautomation catalog before concluding "impossible"
-
-`alertAvailableActions` answers *what this token can trigger through this API*. It
-does not answer *what the platform can do to this alert*. Hyperautomation ships
-native integration actions for exactly these write-backs, and they are listed in
-`hyperautomation/references/integration-catalog.md` with their `public_action_id`:
-
-| Native HA action | Endpoint in the catalog |
+| State | Meaning |
 |---|---|
-| `Set Alert Status to Resolved` (`cef56759-…`) | `/web/api/v2.0/threats` |
-| `Resolve Alert as False Positive Benign` (`695e0289-…`) | `/web/api/v2.0/threats` |
-| `Resolve Alert as True Positive Malware` (`2c03fe1f-…`) | `/web/api/v2.0/threats` |
-| `Verdict False Positive Benign` (`fb264d94-…`) | `/web/api/v2.1/unifiedalerts/graphql` |
-| `Status In Progress` (`b9658ad8-…`) | `/web/api/v2.1/unifiedalerts/graphql` |
+| `not_offered` | This caller may not trigger it on this alert. Check the service user's UAM permissions. |
+| `disabled` | Offered but disabled, with the API's own `disabledReason`. |
+| `offered` | Available here, so the mutation error is the real cause. Escalate. |
 
-Read that table carefully before assuming it is a way round a `not_offered`
-result. The `unifiedalerts/graphql` rows are the same endpoint and the same
-`alertTriggerActions` ids documented above, so they inherit the same per-alert-type
-availability: no bypass. The `/web/api/v2.0/threats` rows belong to the EDR
-**threat** family, which is a different object from a UAM alert and which
-`hyperautomation/references/api-integration.md` records as decommissioned
-(HTTP 405) for note, verdict and status write-backs.
+**Availability is filtered by the caller's permissions AND the alert type.** One
+service-user token is offered `statusUpdate` on a native STAR alert and not on
+an alert ingested via `/v1/alerts`; a console user session performs the
+identical mutation on either. So `not_offered` means "this identity lacks what
+this alert needs", never "impossible".
 
-What is genuinely untested is whether a native action, executed by the platform
-under its own identity rather than by a service-user token, is bound by the same
-availability. Resolve that by running the action in a workflow, not by reasoning
-about it. The point of this section is the search order: **UAM availability, then
-the HA integration catalog, then the console UI, and only then "no route exists".**
-Two of those were skipped on the run that produced this note.
+Availability is also scope-sensitive: `S1/incident/*` reports
+`INCIDENT_ACTIONS_ONLY_AVAILABLE_FROM_SITE_VIEW` under `ACCOUNT` scope and is
+enabled under `SITE`. Re-check per scope.
 
-Two further measured facts from the same probe:
+The enum is not a hidden cause: an invalid value is rejected outright (`CLOSED`
+raises `Invalid input for enum 'Status'`). Live enum:
+`NEW | IN_PROGRESS | RESOLVED`.
 
-- Action availability is **scope-sensitive**. The incident actions
-  (`S1/incident/create`, `addToExisting`, `remove`) are disabled under
-  `ACCOUNT` scope with `disabledReason:
-  INCIDENT_ACTIONS_ONLY_AVAILABLE_FROM_SITE_VIEW`, and enabled under `SITE`.
-  Re-check availability per scope, not once per tenant.
-- The enum is not a hidden cause. The schema rejects a bad value outright
-  (`CLOSED` raises `Invalid input for enum 'Status'`), so a value that gets as
-  far as `failure` was accepted. Live enum: `NEW | IN_PROGRESS | RESOLVED`.
+### Hyperautomation native actions
+
+`hyperautomation/references/integration-catalog.md` lists native write-back
+actions with their `public_action_id`: `Set Alert Status to Resolved`,
+`Resolve Alert as False Positive Benign`, `Resolve Alert as True Positive
+Malware` (all against `/web/api/v2.0/threats`, the EDR **threat** family, which
+is a different object from a UAM alert and decommissioned for note / verdict /
+status), plus `Verdict False Positive Benign` and `Status In Progress` (against
+`/web/api/v2.1/unifiedalerts/graphql`, the same endpoint and ids as above).
 
 ---
 

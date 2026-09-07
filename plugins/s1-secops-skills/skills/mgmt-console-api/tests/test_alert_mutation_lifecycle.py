@@ -86,9 +86,8 @@ def _check_triggered_ok(resp: Dict[str, Any], operation: str) -> None:
     post-condition wait to time out with no explanation of why.
     `action_outcome` collapses the payload to applied/not plus reasons, and
     `trigger_actions` attaches an `alertAvailableActions` diagnosis on failure,
-    so the message distinguishes "this alert type does not offer the action"
-    from a genuine permission or state problem. Do not read
-    `errorMessage` alone as the cause.
+    which distinguishes "this caller may not trigger it here" from a state
+    problem. Do not read `errorMessage` alone as the cause.
     """
     typ = resp.get("__typename")
     if typ == "TriggerActionsError":
