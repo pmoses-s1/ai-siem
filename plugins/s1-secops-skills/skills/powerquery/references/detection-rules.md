@@ -18,6 +18,19 @@ Decision guide:
 - The signal is "N occurrences" or "A then B" across several events, correlated by a user/host/IP, **correlation**.
 - The signal needs `group`, `estimate_distinct`, `sum`, a `lookup` / anti-join, or any pipe, **scheduled**.
 
+Framed by intent rather than by mechanics:
+
+| Intent | Type |
+|---|---|
+| A deterministic signature: this event, these fields | single-event |
+| The same entity does several things close together in time | correlation |
+| Retrospective, query-shaped detection over history: low-and-slow, multi-stage, patterns that only appear once aggregated | scheduled |
+
+Correlation is a streaming, per-entity state machine: it groups events by an
+entity, waits for the configured behaviours to accumulate, and fires. Scheduled
+is a query run on a timer over a lookback window. That difference decides which
+one can see your pattern at all, before any question of convenience.
+
 The "Hard limits" below and the "Scheduled detection rule, full option set" section apply to the scheduled (PowerQuery-body) type. Single-event and correlation bodies are boolean S1QL and are not bound by the 1,000-row / 1 MB PowerQuery limits.
 
 ### Single-event (`queryType: "events"`)
@@ -69,6 +82,95 @@ There is no `lookup` in a single-event body (no pipes). To exclude known-good ac
 ```
 
 Tenant-validated 2026-06-24: a single-subQuery correlation (`entity:"user"`, `matchInOrder:false`, `windowMinutes:60`, `matchesRequired:2`) was accepted (created Draft, then deleted). The existing "Abnormal Spike in SSH Login Failures" rule uses two sub-queries with `matchesRequired:500` each over a 60-minute window.
+
+#### Sizing `windowMinutes`: default to 60, and never below your ingestion lag
+
+The window must comfortably exceed end-to-end ingestion lag, not just the
+attacker's tempo. Agents and integrations buffer, networks lag, and ingestion
+falls behind during bursts, so with a window of 10 minutes or less a
+late-arriving event lands outside the window even though the behaviours really
+did happen together, and the rule **silently fails to fire**. Nothing surfaces
+this: it looks identical to "no such activity".
+
+**Use 60 minutes as the default.** Reserve sub-hour windows for sources you know
+ingest in near real time. Otherwise match the window to the threat's real tempo:
+brute force unfolds in minutes, lateral movement in hours, slow exfiltration
+over days. Too long is its own failure, unrelated activity drifting into one
+alert.
+
+This is the first thing to check when a correlation rule does not fire, ahead of
+the query itself.
+
+#### The cartesian-product trap: one event, many entities, many alerts
+
+A single event can carry several values for a field the entity keys on: several
+user contexts, several destination IPs, an array-valued field. The rule then
+expands that event into **one entity per combination of values**, each
+accumulating state independently and each able to fire its own alert.
+
+With entity `(user, host)` and an event carrying `user: alice` and
+`host: web-01, web-02, web-03`, the rule tracks three entities, not one, and can
+raise three alerts for what was logically a single incident. Two multi-valued
+fields holding 3 and 4 values produce 12 entities from one event.
+
+The same thing happens through OR aliases: fields grouped as alternative
+spellings of one identity, which in reality hold *different* values on the same
+event, each become an entity. `real_user` and `effective_user` are related, not
+aliases.
+
+There is an internal cap on how many entities one event may map to. Above it the
+system **skips entity-state updates for that event entirely**, so an over-broad
+entity silently drops the events it was meant to track.
+
+Avoid it by preferring single-valued fields for the key, keeping composites
+shallow (each dimension multiplies the blast radius), and auditing OR groups so
+they only contain genuine renames of the same value.
+
+A cool-off period does **not** fix duplicate alerts of this kind: cool-off
+suppresses repeats for the *same* entity, and these duplicates arrive under
+different entities. The fix belongs in the entity definition.
+
+#### Field names the validator refuses as a correlation key
+
+Beyond syntax (a dotted identifier path, optional `[N]` index, no leading digit
+or underscore, no colons, hyphens or spaces), whole categories are rejected
+because they cannot work as an identity:
+
+| Category | Why it can never fire |
+|---|---|
+| Per-event identifiers (event/request/correlation/transaction/span IDs, per-event UUIDs) | every event is its own entity, so nothing ever accumulates |
+| Timestamps (occurred, received, created, updated) | change on every event, identify nothing |
+| Free text (message, description, command line, URL, stack trace, raw payload) | enormous entity cardinality, very noisy |
+| Measurements and counters (count, duration, size, ratio, score) | describe the event, do not identify its subject |
+| High-entropy non-identity values (digests, signatures, tokens, nonces) | unique but name nothing stable |
+| Platform-reserved (`account.id`, `account.name`, `rule.id`, `filterid`, `filterpurposeruleid`, `accountidoempurpose`, and `__` / `:` / `sca:` / `synthetic:` / `_k8s_` prefixes) | clash with platform internals |
+
+Good keys are stable identifiers: user id or name, agent UUID, host name, source
+IP, or a composite such as agent + process id. Standard identity fields pass even
+when they superficially resemble a restricted category. The validator's error
+message names the field and the reason, and is authoritative over this table.
+
+#### Mitigation on a correlation rule needs its fields pinned in singleton groups
+
+Inline Active Response runs **on the endpoint**, so the rule can only carry it
+out when every matched event is guaranteed to carry the identifiers the agent
+needs. With a custom entity that guarantee comes from the group layout: each
+required field must sit in a group of its own. Because every event joining the
+entity must supply a value for every group, a singleton group forces that field
+to be present on every match, including the event that triggers the action.
+
+| Action | Required singleton groups |
+|---|---|
+| Network Quarantine | `agent.uuid` alone in its own group |
+| Treat as Threat | `agent.uuid` **and** a process id (`src.process.storyline.id` or `src.process.uid`), each alone |
+
+The moment `agent.uuid` shares a group with anything else (say
+`[agent.uuid, host.name]`), an event supplying only `host.name` could match with
+no agent UUID, the guarantee is lost, and **both** actions become unavailable. A
+pure cross-source identity such as user + host with no agent field supports
+neither: those are the XDR-style rules where mitigation cannot run
+deterministically, and the response belongs in a Hyperautomation flow instead.
+The built-in Storyline and Process presets support both actions unconditionally.
 
 #### Custom correlation key (`entity: "custom"`)
 
@@ -306,6 +408,111 @@ Other paths that bind the entity:
 - **UAM ingest** (indicator/alert posted to `/v1/*`): asset built from the event's `device` object.
 
 `storylineId` is NOT required for binding.
+
+## Scheduled rules: the query shape decides what the threshold counts
+
+The threshold does not have a fixed meaning. **The shape of the PowerQuery
+decides what it is compared against**, and getting this wrong is the difference
+between a rule that fires on every evaluation and one that never does:
+
+| Query shape | Threshold type | Compared against |
+|---|---|---|
+| Simple filter, no `group` | `count` | total number of matching **events** |
+| Contains `| group … by …` | `tableRows` | number of **result rows** |
+
+So `threshold > 500` on a non-aggregating filter means 500 events, while the
+same threshold on a grouped query means 500 rows, which is usually a wildly
+different bar. A grouped query returning one row per offending user typically
+wants `tableRows > 0` with the real condition expressed as
+`| filter FailureCount >= 100` inside the query.
+
+When the query aggregates, **every sub-query inside a `join` or `union` needs its
+own `| group`**.
+
+Starting points, to be tuned rather than copied:
+
+| Detection | Shape | Look-back | Run every |
+|---|---|---|---|
+| Environment-wide failed-auth volume | `count` > N | 1 hour | 5 min |
+| Brute force on one account (low and slow) | `tableRows`, group by user + host | 24 hours | 1 hour |
+| Password spraying (one source, many accounts) | `tableRows`, `estimate_distinct` per source IP | 1 hour | 15 min |
+| Two behaviours on one host (`join`) | `tableRows`, each side grouped | 1 hour | 15 min |
+| Activity absent from an allow-list (anti-join) | `tableRows`, `dataset` + null marker | 1 hour | 15 min |
+
+### Scheduled-rule limits that are not obvious from Event Search
+
+Anything expressible in Event Search is **not** automatically valid in a
+scheduled rule:
+
+- `| datasource` is not supported.
+- `savelookup` is not supported. CSV lookups use `dataset '/datatables/<file>.csv'`, are **exact-match only** (no CIDR, no wildcard), and the file must stay valid or the rule auto-disables.
+- **Lookup tables are per-account.** A global rule referencing one fails evaluation in any account missing the table, sits in *Activating* and retries each cycle, recovering once the table appears. Ensure the CSV exists in every targeted account.
+- Intermediate result tables are capped (~1,000 rows in optimized mode), so results can be silently incomplete. Filter as early as possible and `limit` intermediate results.
+- Alert title, description and target name **cannot** be set dynamically from the query result. The target asset comes from `entityMappings` only.
+- Webhook notifications are not supported directly; route through a Hyperautomation flow.
+- A subset of PowerQuery functions is unsupported in scheduled rules.
+
+### Escape hatch: run the query in a Hyperautomation flow instead
+
+Every limit above is a limit of the scheduled-rule *evaluator*, not of the
+platform. A scheduled Hyperautomation workflow that runs the query itself and
+raises the alert itself is bound by none of them:
+
+| Scheduled-rule limit | In an HA flow |
+|---|---|
+| `\| datasource` unsupported | full PowerQuery, it is an ordinary LRQ |
+| `savelookup` unsupported | allowed |
+| CSV lookups exact-match, per-account | any join the query language supports |
+| ~1,000-row intermediate cap | the LRQ's own limits, far higher |
+| Alert title/description/target not dynamic | you compose the alert body, so every field is dynamic |
+| No direct webhooks | any HTTP call the flow can make |
+| Threshold semantics fixed by query shape | any condition you can express |
+
+The cost is that you own the polling, the failure handling and the alert
+schema. Reach for it when a limit blocks the detection, not by default: a
+scheduled rule that fits within the limits is less code to keep alive.
+
+**The shape**, both halves of which exist in shipped deployer templates:
+
+1. `scheduled_trigger` on the cadence you want.
+2. `http_request` POST `/sdl/v2/api/queries` to launch the LRQ. Capture the
+   query id AND the `X-Dataset-Query-Forward-Tag` response header.
+3. `variable` to hold the query id, then a `loop`.
+4. Inside the loop, `http_request` GET `/sdl/v2/api/queries/{id}` echoing the
+   forward tag on **every** poll, a `condition` on
+   `stepsCompleted >= stepsTotal`, a `delay` before the next attempt, and
+   `break_loop` once complete. There is no `status` string to test.
+5. `condition` on the result: rows returned, a threshold, whatever the
+   detection means. No match, exit quietly.
+6. On a match, `http_request` POST `/v1/alerts` on the ingest host to raise the
+   UAM alert, with indicators inline in `finding_info.related_events[]` (see the
+   UAM Alert Interface notes: `/v1/indicators` is unreachable, so the indicators
+   must ride in the same POST). Alert ingest authenticates with
+   `S1_CONSOLE_API_TOKEN` and **does** require `S1-Scope`.
+
+A ready-to-adapt template covering the whole chain ships as
+`sdl-solutions/assets/scheduled_query_to_uam_alert.workflow.template.json`:
+fill in `{{PQ_QUERY}}`, `{{ACCOUNT_ID}}`, `{{SITE_ID}}`, `{{START_AT}}`, the two
+connection names and a `{{PREFIX}}`, then import. It is assembled from two
+flows already running in the field, so the mechanics are proven even though
+this combined file has not itself been deployed:
+`ingesthealth_watchdog.workflow.template.json` for the LRQ launch and
+forward-tag poll loop, and `rba_collector.workflow.template.json` for the
+`POST /v1/alerts` half.
+
+Two failure modes worth pre-empting, both paid for in live debugging:
+
+- **Omitting the forward tag on a poll** fails the request at the routing layer. The tag is session-scoped: one flow's tag cannot be reused by another.
+- **A fixed `delay` instead of a poll loop** races the query. The LRQ expires roughly 30 seconds after the last poll, so poll steadily and cancel when done rather than sleeping once for a guessed duration.
+
+### What the alert's Indicators tab will contain
+
+Scheduled-rule alerts are shaped differently from single-event and correlation
+alerts, which matters for anything parsing them downstream:
+
+- **Grouped query:** N+1 indicators, one generic indicator carrying the full result table plus one per result row.
+- **Non-grouped query:** a single indicator carrying the event count.
+- The full result is published as-is under the alert's scheduled-rule output; columns need not be renamed to OCSF names.
 
 ## Scheduled detection rule: full option set (UI ↔ API)
 

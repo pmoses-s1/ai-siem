@@ -63,8 +63,10 @@ Ingest a synthetic alert via the UAM Alert Interface (HEC). For creating test/sy
 **`uam_post_alert`**
 Post an OCSF-formatted alert to the HEC ingest endpoint.
 
-**`uam_post_indicators`**
-Post OCSF-formatted threat intelligence indicators (file, network, process observables) to the HEC ingest endpoint.
+**`uam_available_actions`**
+List the actions this caller may trigger on an alert, with `isDisabled` and `disabledReason` per action. Availability is filtered by the caller's permissions and by the alert type, so query this before concluding that a write is impossible.
+
+Indicators are no longer posted separately: `/v1/indicators` is unreachable, so they are created inline with the alert in a single `POST /v1/alerts` (see `uam_post_alert`).
 
 ### SDL tools
 

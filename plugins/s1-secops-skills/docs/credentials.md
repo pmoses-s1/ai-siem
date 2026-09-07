@@ -10,7 +10,8 @@ This is the canonical credentials reference for every install path (Docker quick
 {
   "S1_CONSOLE_URL":       "https://usea1-yourorg.sentinelone.net",
   "S1_CONSOLE_API_TOKEN": "eyJ...your-api-token...",
-  "S1_HEC_INGEST_URL":    "https://ingest.us1.sentinelone.net"
+  "S1_HEC_INGEST_URL":    "https://ingest.us1.sentinelone.net",
+  "S1_HEC_TOKEN":         "<SDL Log Write Key>"
 }
 ```
 
@@ -19,8 +20,11 @@ This is the canonical credentials reference for every install path (Docker quick
 | `S1_CONSOLE_URL` | Everything | Your console URL, e.g. `https://usea1-acme.sentinelone.net`. No trailing slash. |
 | `S1_CONSOLE_API_TOKEN` | Mgmt Console REST, PowerQuery LRQ, UAM GraphQL, Purple AI GraphQL, SDL config ops (Management Z SP5+) | Settings → Users → Service Users → Create Service User → copy the API token. |
 | `S1_HEC_INGEST_URL` | UAM alert/indicator ingest, SDL log ingest | Region-specific HEC host, e.g. `https://ingest.us1.sentinelone.net`. Look up yours at [SentinelOne Endpoint URLs by Region](https://community.sentinelone.com/s/article/000004961). |
+| `S1_HEC_TOKEN` | Raw log ingest over the event collector (`hec_ingest`) only | An **SDL Log Write Key**, minted per account or site: Console → Singularity Data Lake → API Keys → Log Write Key. Optional; needed only for log ingest. |
 
-`S1_CONSOLE_URL` and `S1_CONSOLE_API_TOKEN` are the minimum required, and between them they authorise every SDL operation including parser and dashboard deployment. Add `S1_HEC_INGEST_URL` only when you need HEC log or alert ingest. The scoped SDL keys (`SDL_CONFIG_READ_KEY`, `SDL_CONFIG_WRITE_KEY`, `SDL_LOG_READ_KEY`, `SDL_LOG_WRITE_KEY`, `SDL_XDR_URL`) are retired and are no longer read.
+`S1_CONSOLE_URL` and `S1_CONSOLE_API_TOKEN` are the minimum required, and between them they authorise every SDL operation including parser and dashboard deployment. Add `S1_HEC_INGEST_URL` only when you need HEC log or alert ingest, and `S1_HEC_TOKEN` when that includes **raw log** ingest.
+
+The two ingest paths do not share a credential. UAM alert ingest (`POST /v1/alerts`) authenticates with `S1_CONSOLE_API_TOKEN` and requires an `S1-Scope` header. Raw log ingest over the event collector requires `S1_HEC_TOKEN`, an SDL Log Write Key, and sends **no** scope header, because the key is minted against a fixed account or site. The collector rejects the console token outright. The scoped SDL keys (`SDL_CONFIG_READ_KEY`, `SDL_CONFIG_WRITE_KEY`, `SDL_LOG_READ_KEY`, `SDL_LOG_WRITE_KEY`, `SDL_XDR_URL`) are retired and are no longer read.
 
 ```python
 ```

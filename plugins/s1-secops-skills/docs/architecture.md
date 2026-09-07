@@ -64,7 +64,7 @@ It exposes 26 MCP tools across five groups:
 |---|---|---|
 | PowerQuery | `powerquery_enumerate_sources`, `powerquery_run`, `powerquery_schema_discover` | SDL LRQ API |
 | Mgmt Console | `s1_api_get`, `s1_api_post`, `s1_api_put`, `s1_api_patch`, `s1_api_delete` | S1 REST API v2.1 |
-| UAM | `uam_list_alerts`, `uam_get_alert`, `uam_add_note`, `uam_set_status`, `uam_ingest_alert`, `uam_post_alert`, `uam_post_indicators`, `purple_ai_alert_summary` | UAM GraphQL + HEC ingest |
+| UAM | `uam_list_alerts`, `uam_get_alert`, `uam_add_note`, `uam_set_status`, `uam_ingest_alert`, `uam_post_alert`, `uam_available_actions`, `purple_ai_alert_summary` | UAM GraphQL + HEC ingest |
 | SDL | `sdl_list_files`, `sdl_get_file`, `sdl_put_file`, `sdl_delete_file`, `hec_ingest` | SDL config + HEC log ingest API |
 | Hyperautomation | `ha_list_workflows`, `ha_get_workflow`, `ha_import_workflow`, `ha_export_workflow`, `ha_delete_workflow` | HA public + v1 API |
 

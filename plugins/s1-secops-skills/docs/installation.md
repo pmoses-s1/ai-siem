@@ -45,7 +45,7 @@ All three servers run from public package registries: `s1-secops-mcp` and `@burt
         "-e", "S1_CONSOLE_URL",
         "-e", "S1_CONSOLE_API_TOKEN",
         "-e", "S1_HEC_INGEST_URL",
-        "ghcr.io/pmoses-s1/s1-mcps:1.3.2",
+        "ghcr.io/pmoses-s1/s1-mcps:1.3.3",
         "s1-secops-mcp"
       ],
       "env": {
