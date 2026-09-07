@@ -215,3 +215,37 @@ For `"in"` operator, `compared_value` is a JSON array string: `"[\"HIGH\",\"CRIT
 
 A condition action connects to downstream actions using `custom_handle: "true"` and `custom_handle: "false"`.
 Unconnected branches (e.g., a false branch that does nothing) are simply omitted from `connected_to`.
+
+## Starting from a proven template
+
+Do not hand-assemble a workflow JSON. An `http_request` action carries roughly twenty-five required
+`data` keys (`parameters`, `ssl_verification`, `timeout`, `body_type`, `retry_on_status_codes`,
+`proxy_*`, `redirect_follow`, `continue_on_fail*`, `use_authentication_data`, and the rest), and
+every action additionally needs `state`, `description`, `client_data`, `snippet_workflow_id` and
+`snippet_version_id`. Two shape rules bite hand-written JSON in particular:
+
+- `headers` is a JSON object (`{"Content-Type": "application/json"}`), NOT a list of
+  `{key, value}` pairs.
+- There is no `content_type` key. Content type is carried in `headers`.
+
+A flow missing any of this imports with HTTP 200 and fails at runtime, and Hyperautomation exposes
+no per-action error API, so the cause is not visible from the execution record.
+
+Shipped starting points, all generated from flows running in the field:
+
+| Template (`sdl-solutions/assets/`) | Use for |
+|---|---|
+| `ha_watchdog.workflow.template.json` | scheduled PowerQuery via LRQ, raising a UAM alert (the general case) |
+| `ingesthealth_watchdog.workflow.template.json` | absence / silence detection off an LRQ |
+| `ingesthealth_baseline_builder.workflow.template.json` | scheduled `savelookup` baseline refresh |
+| `rba_collector.workflow.template.json` | per-entity scoring collector |
+| `ingesthealth_alert_notifier.workflow.template.json` | email notification off a query result |
+
+The alternative, when no template fits, is to export a running flow from the tenant with
+`GET /hyper-automate/api/public/workflow-import-export/export` and diff your action envelope
+against it. That export returns every workflow in the account and is the fastest source of truth
+for the current shape.
+
+When adapting a template, change action `data` values only. Renaming a `variable` action's `name`
+breaks every `{{local_var.<name>}}` reference elsewhere in the flow; the result imports cleanly and
+then fails activation with HTTP 400 "Some actions in this workflow have invalid references".
