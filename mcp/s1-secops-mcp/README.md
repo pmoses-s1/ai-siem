@@ -78,7 +78,7 @@ Add this to `claude_desktop_config.json` (or `.mcp.json` for Claude Code):
         "S1_CONSOLE_URL":       "https://usea1-yourorg.sentinelone.net",
         "S1_CONSOLE_API_TOKEN": "eyJ...",
         "S1_HEC_INGEST_URL":    "https://ingest.us1.sentinelone.net",
-        "S1_HEC_TOKEN":         "<SDL Log Write Key, only for raw log ingest>"
+        "S1_HEC_TOKEN":         "<SDL Log Write Key, optional; hec_ingest needs it>"
       }
     }
   }
