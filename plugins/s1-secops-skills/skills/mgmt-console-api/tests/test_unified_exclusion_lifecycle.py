@@ -1,5 +1,5 @@
 """
-Unified Exclusion lifecycle round-trip test — REVERSIBLE.
+Unified Exclusion lifecycle round-trip test, REVERSIBLE.
 
 Exercises the Exclusions v2.1 endpoint surface:
 
@@ -15,7 +15,7 @@ Scope
 -----
 Scoped to the first visible site by default, or --site-id to pin explicitly.
 If the token lacks "Exclusions write" scope the test will fail at CREATE with
-HTTP 403 and exit 1 (skipping cleanup — nothing was created).
+HTTP 403 and exit 1 (skipping cleanup, nothing was created).
 
 Usage
 -----
@@ -45,7 +45,7 @@ EXCLUSION_NAME = f"{RUN_TAG}-exc"
 
 EXCL_BASE = "/web/api/v2.1/unified-exclusions"
 
-# A harmless fictional path — won't match any real file.
+# A harmless fictional path, won't match any real file.
 SAFE_PATH_VALUE = f"/zzz-smoke-test/{RUN_TAG}/does-not-exist.bin"
 
 
@@ -145,8 +145,8 @@ def main() -> int:
         created = create_exclusion(client, site_id)
     except S1APIError as e:
         if e.status == 403:
-            _log(f"CREATE skipped: HTTP 403 — token lacks Exclusions write scope")
-            return 0  # Not a test failure — capability gate
+            _log(f"CREATE skipped: HTTP 403, token lacks Exclusions write scope")
+            return 0  # Not a test failure, capability gate
         _log(f"CREATE FAILED: HTTP {e.status} {e}")
         return 1
     excl_id = created["id"]
@@ -186,7 +186,7 @@ def main() -> int:
         return 4
     _log("VERIFY ok: exclusion removed")
 
-    _log("Unified exclusion lifecycle: CREATE → LIST → DELETE → VERIFY — ALL OK")
+    _log("Unified exclusion lifecycle: CREATE → LIST → DELETE → VERIFY, ALL OK")
     return 0
 
 

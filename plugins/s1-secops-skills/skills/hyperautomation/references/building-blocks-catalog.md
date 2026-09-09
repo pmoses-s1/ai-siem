@@ -1221,7 +1221,7 @@ you generate.
 
 ## E7. Dropping `retry_on_status_codes` on flaky upstreams
 
-The active corpus uses `retry_on_status_codes: [500]` on most integration HTTP requests ,
+The active corpus uses `retry_on_status_codes: [500]` on most integration HTTP requests,
 cheap insurance against transient backend hiccups. Mirror this default for any external API
 call.
 

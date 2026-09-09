@@ -369,7 +369,7 @@ Both block the W+X memory mappings V8 needs to JIT JavaScript. Adding them cause
 | `Connection refused` on `127.0.0.1:8765` | Service not running | `sudo systemctl status s1-secops-mcp`; check `journalctl -u s1-secops-mcp -n 50`. |
 | 401 on every request | No bearer token, or wrong one | Confirm `Authorization: Bearer <token>` is set; confirm the token is in `/etc/s1-secops-mcp/bearer-tokens.json`. |
 | `tools/call` returns `Error: connect ECONNREFUSED` to `*.sentinelone.net` | S1 creds missing or VM has no outbound to console | `curl -v https://$YOUR_CONSOLE_URL`; check `/etc/s1-secops-mcp/credentials.json`. |
-| Service starts but `Tools: 0 registered` | Code/import error | `journalctl -u s1-secops-mcp -n 100` for the import stack trace. |
+| Service starts but `Tools: 32 registered` | Code/import error | `journalctl -u s1-secops-mcp -n 100` for the import stack trace. |
 | `502 Bad Gateway` from Caddy | Backend died between Caddy reload and proxy attempt | `systemctl status s1-secops-mcp`. |
 
 ## Alternative deployments

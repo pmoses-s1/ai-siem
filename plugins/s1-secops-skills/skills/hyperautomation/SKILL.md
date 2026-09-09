@@ -290,6 +290,17 @@ Use this when the workflow contains integration-backed actions:
 
 ## Common mistakes to avoid
 
+- ❌ Hand-assembling a workflow JSON action by action. The action envelope has far more required
+  keys than a hand-written one will carry, and a flow missing any of them imports with HTTP 200 and
+  then fails at runtime, with no per-action error surface to point at the cause.
+  ✅ Start from a shipped, tenant-validated template and change only the query, the payload text and
+  the connection binding. See "Starting from a proven template" in `references/workflow-schema.md`.
+- ❌ Renaming a `variable` action's `name` when adapting a template. Every `{{local_var.<name>}}`
+  elsewhere in the flow still points at the old name. The edited flow imports cleanly, then
+  activation fails with HTTP 400 "Some actions in this workflow have invalid references".
+  ✅ Treat variable names as an API: change their VALUES freely, never their names. Before importing
+  an edit, assert the set of variable names is unchanged and that every `local_var.X` reference
+  resolves to one of them.
 - ❌ Referencing an OPTIONAL interaction-form field directly. A field the respondent left blank is
   ABSENT from `response.result`, and a bare reference to an absent attribute ERRORS the whole run.
   The flow passes testing (every field filled) then dies in production on the first skipped field.

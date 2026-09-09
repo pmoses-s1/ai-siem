@@ -14,7 +14,7 @@ downstream `Function.JQ` that indexes it fails:
 Couldn't apply jq filter ... Error: Cannot index string with string "rows"
 ```
 
-This bites whenever one JQ step feeds another — merge then roll up, parse then filter. Defensive
+This bites whenever one JQ step feeds another, merge then roll up, parse then filter. Defensive
 prelude for any jq program that consumes another jq step's output:
 
 ```jq
@@ -67,7 +67,7 @@ and reference `local_var.*` from the payload.
 
 `timebucket('1d')` is aligned to absolute UTC midnight, but `DELTA_NOW` is a **rolling** window. A
 rolling window only contains a complete day bucket if it reaches back `run_hour + 24h`, so the width
-needed tracks the schedule — 26 h at 01:00, 39 h at 14:00. **Moving a flow's schedule silently
+needed tracks the schedule, 26 h at 01:00, 39 h at 14:00. **Moving a flow's schedule silently
 changes how much it scans**, and can leave it scanning no complete bucket at all.
 
 Verified working, hour-independent, exactly 24 h:
@@ -96,8 +96,8 @@ Two gotchas:
 
 It is easy to write a plausible-sounding function that does not exist. `Function.OBJECT` and
 `Function.EPOCH_NANOS_DAYS_AGO` both shipped into a draft in this way; neither is real. There is no
-`Function.OBJECT` — compose a JSON literal by template interpolation instead, and there is no
-epoch-nanos helper — derive the value inside jq.
+`Function.OBJECT`, compose a JSON literal by template interpolation instead, and there is no
+epoch-nanos helper, derive the value inside jq.
 
 Cheap guard: fail the build on any `Function.<NAME>` not present in `functions-reference.md`.
 
@@ -110,7 +110,7 @@ A `variable` action referencing a deliberately non-existent attribute is an inte
 {{poll-action.body.LRQ_TERMINATED_see_lrq_http_status_and_lrq_error_body}}
 ```
 
-This reads as a bug on first encounter and is easily misdiagnosed as one. It is not — but it is
+This reads as a bug on first encounter and is easily misdiagnosed as one. It is not, but it is
 improvable. Set the real diagnostics in **preceding** variables in the same action so the execution
 record carries the actual status code and message, then throw last:
 
@@ -135,7 +135,7 @@ termination relaunches the query.
 - Export is `GET .../workflow-import-export/export/{workflow_id}/{version_id}`. Omitting
   `version_id` returns `404`, which reads like "not found" rather than "wrong shape".
 - A token without `Hyper Automate.workflowsExport` gets a flat `403 Insufficient permissions` on
-  both single and batch export while list and execution reads keep working — the gap is invisible
+  both single and batch export while list and execution reads keep working, the gap is invisible
   until you try.
 - The platform **reassigns `export_id`** on export. Diffing two exports by `export_id` compares
   unrelated actions and produces nonsense. Normalise to a name-keyed graph first.

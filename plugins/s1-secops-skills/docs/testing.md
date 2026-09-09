@@ -52,7 +52,7 @@ All 26 s1-secops-mcp tools were exercised against the live demo tenant:
 | `purple_ai_alert_summary` | Generate natural-language summary of a UAM alert | PASSED |
 | `uam_ingest_alert` | POST OCSF alert via HEC | PASSED |
 | `uam_post_alert` | POST OCSF alert envelope | PASSED |
-| `uam_post_indicators` | POST OCSF threat indicators | PASSED |
+| `uam_available_actions` | List actions triggerable on an alert | PASSED |
 | `sdl_list_files` | List `/logParsers/` and `/dashboards/` | PASSED |
 | `sdl_get_file` | Download parser JSON | PASSED |
 | `sdl_put_file` | Deploy dashboard JSON to SDL | PASSED |

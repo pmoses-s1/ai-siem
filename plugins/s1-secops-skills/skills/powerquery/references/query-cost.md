@@ -45,7 +45,7 @@ Two things to know before applying this:
 - **After `group`, the source field no longer exists.** The join must key on the grouped alias
   (`entity_v`, not `dataSource.name`) or PQ returns `400 undefined field '<name>'`.
 - **Only equivalent when the join key survives the `group` unchanged.** If the grouped alias is
-  derived — a namespaced `"source / device"`, a `let` expression — the rewrite changes semantics and
+  derived, a namespaced `"source / device"`, a `let` expression, the rewrite changes semantics and
   is not a mechanical substitution.
 
 ---
@@ -79,7 +79,7 @@ per width, 15-day target window:
 | Slice width | Slices needed | Completed | Mean per slice |
 |---|---:|---:|---:|
 | 1 day | 15 | 3/3 | 46 s |
-| 2 day | 8 | first slice unfinished after ~20 min | — |
+| 2 day | 8 | first slice unfinished after ~20 min | n/a |
 
 Narrower was both more reliable **and** faster overall, despite needing nearly twice the slices.
 
@@ -103,7 +103,7 @@ A query whose read half finishes can still die in the write:
      "message":"timeout prevented savelookup from completing"}
 ```
 
-Re-polling never recovers this — the query is already dead server-side. **Retry means relaunch, not
+Re-polling never recovers this, the query is already dead server-side. **Retry means relaunch, not
 re-poll.** A flow that retries the poll on 5xx will burn its whole budget achieving nothing.
 
 ---
@@ -134,5 +134,5 @@ down during the work that produced this file.
 3. **Tenant load variance can exceed the effect being measured.** The identical query measured 6.8 s
    and 18.0 s in different repetitions on the same day. A single sample is not evidence.
 4. **`estimate_distinct` error is material at scale.** Measured 45,622 against a true 46,668 distinct
-   (zero duplicates, verified exactly with `group count() by <key> | filter count > 1`) — a 2.2 %
+   (zero duplicates, verified exactly with `group count() by <key> | filter count > 1`), a 2.2 %
    undercount. Use it for magnitude only. Never to prove uniqueness or reconcile a row count.

@@ -72,6 +72,27 @@ join (q1), (q2) on x         ← "join" is interpreted as a search keyword
 
 Fix: `| join (q1), (q2) on x`. The same rule applies to `union`.
 
+### `join` placed mid-pipeline
+
+A leading pipe is necessary but not sufficient: `join` must be the FIRST command
+in the query, not merely preceded by one.
+
+```text
+dataSource.name='X' field=*
+| filter ...
+| left join ( ... ) on k = field   ← 400 "join can only be used as the first command in a query"
+```
+
+Fix: hoist both sides into the join and put it first, filtering afterwards.
+
+```text
+| left join a = ( | dataset 'config://datatables/<Table>' | columns k, v ),
+            b = ( dataSource.name='X' field=* | group n = count() by k = field )
+  on a.k = b.k
+| let ...
+| filter ...
+```
+
 ### `compare` or `transpose` not last
 
 ```text
@@ -692,6 +713,38 @@ Before blaming the query:
 
 Don't keep re-running slightly rephrased versions, the Purple MCP docs warn explicitly against that. If the data isn't there, no rewrite finds it.
 
+### One predicate silently takes the whole result to zero
+
+A pipeline stage can drop every row while the query still returns HTTP 200, so
+the result is indistinguishable from "no such data". Bisect: run the head
+predicate alone, then add one pipe at a time, recording the row count at each
+step. The stage where the count falls to zero is the bug.
+
+Measured: a `matches` regex used to exclude machine accounts took 112,680
+matching events to 0 rows, with no error at any point.
+
+```text
+<head predicate>                                    → 112,680 events, rows > 0
+<head> | group ... by userkey = <field>             → rows > 0
+<head> | filter !(<field> matches '\$$') | group... → 0 rows      ← the culprit
+```
+
+Prefer `contains:matchcase("x")` over a regex for substring tests. It is easier
+to reason about and free of the backslash escaping that separately breaks
+Hyperautomation activation.
+
+### An age or dormancy threshold longer than the data span can never fire
+
+A "dormant for 30 days" rule against a source holding 23 days of history returns
+zero forever, and reads as "no findings" rather than as a misconfiguration.
+Measure the span before choosing the threshold:
+
+```text
+dataSource.name='X' <field>=*
+| group oldest = oldest(timestamp), newest = newest(timestamp), n = count()
+| limit 1
+```
+
 ### Results look plausible but wrong magnitude
 
 Common cause: grouping dropped a field you assumed was still present, or duplicate rows from a `union`. Add `columns` at the end to make the exact shape explicit, then re-inspect.
@@ -708,7 +761,7 @@ Common cause: grouping dropped a field you assumed was still present, or duplica
 
 `putFile` / `addConfigFile` do **not** validate CSV shape. A free-text column containing a comma
 turns a 4-column row into 5, the write returns **200**, and reading the content back shows exactly
-what was sent — so neither the write nor a naive verification catches it.
+what was sent, so neither the write nor a naive verification catches it.
 
 It surfaces later, on unrelated queries:
 
@@ -734,7 +787,7 @@ A query whose read half completes can still die in the write:
      "message":"timeout prevented savelookup from completing"}
 ```
 
-The query is dead server-side, so **re-polling never recovers it** — a retry has to relaunch. A
+The query is dead server-side, so **re-polling never recovers it**: a retry has to relaunch. A
 poll loop that retries on 5xx will burn its whole budget achieving nothing.
 
 ### Success does not mean correct
@@ -748,6 +801,6 @@ Every write needs a semantic read-back: parse the CSV, count the objects, activa
 
 Killing a client does not stop an LRQ; it continues consuming backend capacity and starves later
 queries on the same tenant. Always `DELETE /sdl/v2/api/queries/{id}` on any exit path that is not a
-completion. Related: **a poll-count budget is not a time budget** — each poll can block for the
+completion. Related: **a poll-count budget is not a time budget**: each poll can block for the
 client timeout, so `max_polls x sleep` badly understates worst-case wall time. Scheduled work needs
 an explicit wall-clock deadline.

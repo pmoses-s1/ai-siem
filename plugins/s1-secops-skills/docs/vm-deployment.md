@@ -86,7 +86,7 @@ Apply without restart (full restart needed for credentials):
 sudo systemctl restart s1-secops-mcp
 ```
 
-`S1_CONSOLE_URL` + `S1_CONSOLE_API_TOKEN` are enough for every tool except HEC ingest, including the SDL config-file tools. `S1_HEC_INGEST_URL` is required only for `uam_ingest_alert`, `uam_post_indicators`, `uam_post_alert` and `hec_ingest`. Full key table in [the MCP README](../../../mcp/s1-secops-mcp/README.md#credentials).
+`S1_CONSOLE_URL` + `S1_CONSOLE_API_TOKEN` are enough for every tool except HEC ingest, including the SDL config-file tools. `S1_HEC_INGEST_URL` is required only for `uam_ingest_alert`, `uam_post_alert` and `hec_ingest`. Raw log ingest through `hec_ingest` additionally needs `S1_HEC_TOKEN`, an SDL Log Write Key, which is a different credential from the console API token: the event collector rejects the console token. UAM alert ingest continues to use `S1_CONSOLE_API_TOKEN`. Full key table in [the MCP README](../../../mcp/s1-secops-mcp/README.md#credentials).
 
 ## TLS in front (Caddy)
 

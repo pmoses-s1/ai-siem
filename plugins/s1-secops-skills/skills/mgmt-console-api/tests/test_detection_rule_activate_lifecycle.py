@@ -1,5 +1,5 @@
 """
-Detection rule activate/deactivate lifecycle test — REVERSIBLE.
+Detection rule activate/deactivate lifecycle test, REVERSIBLE.
 
 Exercises the full enable/disable surface for BOTH rule types:
   - Scheduled (PowerQuery 2.0): queryType=scheduled, queryLang=2.0
@@ -47,7 +47,7 @@ RUN_TAG = f"smoke-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.
 
 RULES_BASE = "/web/api/v2.1/cloud-detection/rules"
 
-# Scheduled: PowerQuery that counts a fictitious datasource — will never match.
+# Scheduled: PowerQuery that counts a fictitious datasource, will never match.
 SCHEDULED_QUERY = (
     "dataSource.name = 'EndpointSecurityWin'"
     " | filter AgentName = 'zzz-smoke-test-does-not-exist'"
@@ -92,13 +92,13 @@ def create_scheduled_rule(client: S1Client, name: str, site_id: str,
         "data": {
             "name": name,
             "queryType": "scheduled",
-            "queryLang": "2.0",         # required — HTTP 400 without it
+            "queryLang": "2.0",         # required, HTTP 400 without it
             "severity": "Low",
             "expirationMode": "Permanent",
             "status": "Disabled",
             "scheduledParams": {
                 "query": SCHEDULED_QUERY,
-                "runIntervalMinutes": 1440,     # 24h — never fires during test
+                "runIntervalMinutes": 1440,     # 24h, never fires during test
                 "lookbackWindowMinutes": 1440,
                 "threshold": {"value": 9999, "operator": "Greater"},
                 "alertPerRow": False,
@@ -188,7 +188,7 @@ def run_rule_lifecycle(client: S1Client, label: str, rule_id: str,
     _log(f"[{label}] ENABLE ok: affected={affected}")
 
     # VERIFY ON
-    # "activating" is the transitional status immediately after enable — fully valid.
+    # "activating" is the transitional status immediately after enable, fully valid.
     # The rule moves to "active" after a short delay. Accept both.
     time.sleep(1)
     rule = get_rule(client, rule_id, site_id, is_scheduled)
@@ -214,7 +214,7 @@ def run_rule_lifecycle(client: S1Client, label: str, rule_id: str,
     rule = get_rule(client, rule_id, site_id, is_scheduled)
     status = (rule or {}).get("status", "").lower()
     if status in ("active", "enabled"):
-        _log(f"[{label}] VERIFY_OFF: rule still active after disable — status={status!r}")
+        _log(f"[{label}] VERIFY_OFF: rule still active after disable, status={status!r}")
     else:
         _log(f"[{label}] VERIFY_OFF ok: status={status!r}")
 

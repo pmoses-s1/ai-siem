@@ -11,7 +11,7 @@ description: >
 > REST `listFiles` / `getFile` **cannot see** udoId-addressed `/dashboards/` files, so `getFile`
 > returns `404` on a dashboard the console is displaying and the listing under-reports (measured on
 > one tenant: REST 8, GraphQL 17, console 48 files). **If a listing disagrees with what the UI
-> shows, the listing is wrong until proven otherwise** — change read path before concluding the
+> shows, the listing is wrong until proven otherwise**, change read path before concluding the
 > object is missing or the token lacks scope. Use the GraphQL `configFiles` / `configFile` surface.
 > A name-addressed `addConfigFile` to `/dashboards/` **creates a duplicate** instead of updating;
 > address dashboards by `udoId` with `expectedVersion`. `content` is HJSON, not JSON. `S1-Scope`
@@ -47,7 +47,7 @@ query f($udoId: ID!) { configFile(udoId: $udoId) { udoId name content version } 
 
 Two things that bite immediately after a successful read:
 
-- **`content` is HJSON, not JSON** — unquoted keys and relaxed commas. `json.loads` raises
+- **`content` is HJSON, not JSON**, unquoted keys and relaxed commas. `json.loads` raises
   `Expecting property name enclosed in double quotes`. Parse with an HJSON reader; you can write
   plain JSON back.
 - **`S1-Scope` is honoured** and silently changes what exists as far as the caller can tell. A

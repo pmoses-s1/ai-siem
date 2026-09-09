@@ -1,5 +1,5 @@
 """
-Hyperautomation workflow import lifecycle test — REVERSIBLE.
+Hyperautomation workflow import lifecycle test, REVERSIBLE.
 
 Builds a minimal workflow JSON from scratch, imports it, verifies it appears
 in the list, then deletes it:
@@ -111,7 +111,7 @@ def import_workflow(client: S1Client, workflow_json: Dict[str, Any],
     }
     resp = client.post(f"{HA_PUBLIC}/workflow-import-export/import", json_body=body)
     # Confirmed: public import response uses top-level "id" and "version_id" (not "workflowId").
-    # The nested workflow data also has an "id" field — same value.
+    # The nested workflow data also has an "id" field, same value.
     public_id = resp.get("id")
     if not public_id:
         raise RuntimeError(f"IMPORT returned no id. Response: {resp}")
@@ -124,7 +124,7 @@ def list_recent_workflows(client: S1Client, account_id: str,
     Return the most recently updated N workflows for the account.
     Items use the v1 nested shape: {id: <v1_uuid>, workflow: {name, id, state, ...}, actions: []}.
     Sorted by updated_at desc so a freshly imported workflow appears on the first page.
-    We never paginate — just fetch the top N and match by run_tag in name.
+    We never paginate, just fetch the top N and match by run_tag in name.
     """
     resp = client.get(
         f"{HA_PUBLIC}/workflows",
@@ -146,7 +146,7 @@ def find_v1_id_by_name(client: S1Client, account_id: str,
                         workflow_name: str) -> Optional[str]:
     """
     Find the v1 workflow UUID by matching workflow.name in the most recently updated
-    workflows. Scans the top 50 sorted by updated_at desc — a freshly imported
+    workflows. Scans the top 50 sorted by updated_at desc, a freshly imported
     workflow will always appear there.
     """
     try:
@@ -174,7 +174,7 @@ def delete_workflow(client: S1Client, v1_workflow_id: str, account_id: str) -> A
     404 "Object not found" means the id is not under that scope or is already deleted.
 
     NOTE: the older POST /workflows/archive returns 500 on this tenant and must not be
-    used — the REST DELETE above is the correct delete mechanism.
+    used, the REST DELETE above is the correct delete mechanism.
     """
     return client.delete(f"{HA_V1}/workflows/{v1_workflow_id}",
                          params={"accountIds": account_id})
@@ -207,7 +207,7 @@ def main() -> int:
         imported = import_workflow(client, wf_json, account_id)
     except S1APIError as e:
         if e.status == 403:
-            _log(f"IMPORT skipped: HTTP 403 — token lacks Hyperautomation write scope")
+            _log(f"IMPORT skipped: HTTP 403, token lacks Hyperautomation write scope")
             return 0
         _log(f"IMPORT FAILED: HTTP {e.status} {e}")
         return 1
@@ -232,7 +232,7 @@ def main() -> int:
         _log(f"KEEP flag set. Leaving workflow {workflow_id} (name={WORKFLOW_NAME!r})")
         return 0
 
-    # Find the v1 UUID for this workflow by name — delete requires the v1 id.
+    # Find the v1 UUID for this workflow by name, delete requires the v1 id.
     _log(f"FIND v1 id for workflow name={WORKFLOW_NAME!r}")
     v1_id = find_v1_id_by_name(client, account_id, WORKFLOW_NAME)
     if not v1_id:
@@ -254,11 +254,11 @@ def main() -> int:
     remaining = list_recent_workflows(client, account_id)
     if remaining:
         _log(f"VERIFY: workflow {workflow_id} still present after delete "
-             f"({len(remaining)} hit(s)) — soft-delete may lag the active list; verify in the console.")
+             f"({len(remaining)} hit(s)), soft-delete may lag the active list; verify in the console.")
     else:
         _log("VERIFY ok: workflow absent from active list after delete")
 
-    _log("Hyperautomation workflow lifecycle: IMPORT → LIST → DELETE → VERIFY — ALL OK")
+    _log("Hyperautomation workflow lifecycle: IMPORT → LIST → DELETE → VERIFY, ALL OK")
     return 0
 
 
