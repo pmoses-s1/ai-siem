@@ -1,12 +1,11 @@
 name: Secret Scanning & Release
 
+# Tag-bound by design: Actions minutes are shared across the account, so this runs only on a
+# release tag push or a manual run; pushes to main, pull requests and schedules run nothing.
 on:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write        # needed for tags + releases
